@@ -1,1 +1,1 @@
-# Esta etapa utiliza somente a biblioteca padrão do Python.
+PySide6>=6.5,<7

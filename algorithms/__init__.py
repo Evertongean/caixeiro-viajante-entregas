@@ -1,6 +1,8 @@
 """Algoritmos de rotas do Delivery Route."""
 
 from .caixeiro_viajante import (
+    EtapaCaixeiroViajante,
+    EtapaTSP,
     LIMITE_PADRAO_CLIENTES,
     ResultadoCaixeiroViajante,
     SegmentoRota,
@@ -19,6 +21,8 @@ from .dijkstra import (
 __all__ = [
     "LIMITE_PADRAO_CLIENTES",
     "ResultadoCaixeiroViajante",
+    "EtapaTSP",
+    "EtapaCaixeiroViajante",
     "SegmentoRota",
     "ArestaAnalisada",
     "AtualizacaoDistancia",

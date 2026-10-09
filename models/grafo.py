@@ -75,9 +75,57 @@ class Grafo:
             raise ValueError(
                 f"Já existe um vértice com o identificador '{vertice.identificador}'."
             )
+        if any(cadastrado.nome == vertice.nome for cadastrado in self._vertices.values()):
+            raise ValueError(f"Já existe um vértice com o nome '{vertice.nome}'.")
+        if vertice.tipo is TipoVertice.DEPOSITO and any(
+            cadastrado.tipo is TipoVertice.DEPOSITO
+            for cadastrado in self._vertices.values()
+        ):
+            raise ValueError("O grafo pode ter no máximo um depósito.")
 
         self._vertices[vertice.identificador] = vertice
         self._adjacencias[vertice.identificador] = {}
+        if vertice.tipo is TipoVertice.DEPOSITO:
+            self._deposito_id = vertice.identificador
+
+    def atualizar_vertice(
+        self,
+        identificador: str,
+        *,
+        nome: str,
+        tipo: TipoVertice,
+        x: float,
+        y: float,
+    ) -> Vertice:
+        """Atualiza os dados de um vértice mantendo seu identificador.
+
+        Como as arestas usam o identificador como chave, preservá-lo mantém
+        todas as conexões consistentes durante a edição.
+        """
+        atual = self._obter_vertice_ou_falhar(identificador)
+        novo = Vertice(identificador, nome, tipo, x, y)
+        if any(
+            cadastrado.identificador != identificador
+            and cadastrado.nome == novo.nome
+            for cadastrado in self._vertices.values()
+        ):
+            raise ValueError(f"Já existe um vértice com o nome '{novo.nome}'.")
+        if novo.tipo is TipoVertice.DEPOSITO and any(
+            cadastrado.identificador != identificador
+            and cadastrado.tipo is TipoVertice.DEPOSITO
+            for cadastrado in self._vertices.values()
+        ):
+            raise ValueError("O grafo pode ter no máximo um depósito.")
+
+        self._vertices[identificador] = novo
+        if atual.tipo is TipoVertice.DEPOSITO and novo.tipo is not TipoVertice.DEPOSITO:
+            self._deposito_id = None
+        elif novo.tipo is TipoVertice.DEPOSITO:
+            self._deposito_id = identificador
+        return novo
+
+    # Nome alternativo explícito para código de edição e futuras integrações.
+    editar_vertice = atualizar_vertice
 
     def remover_vertice(self, identificador: str) -> Vertice:
         """Remove um vértice e todas as arestas ligadas a ele."""
@@ -175,6 +223,9 @@ class Grafo:
 
         self._adjacencias[origem_id][destino_id] = peso_validado
         self._adjacencias[destino_id][origem_id] = peso_validado
+
+    # Alias semântico usado pelo editor, mantendo a API original disponível.
+    editar_aresta = atualizar_peso_aresta
 
     def definir_deposito(self, identificador: str) -> None:
         """Define o único depósito principal do cenário.

@@ -30,6 +30,26 @@ class SegmentoRota:
 
 
 @dataclass(frozen=True, slots=True)
+class EtapaTSP:
+    """Fotografia explicativa de uma avaliação do TSP exato."""
+
+    numero: int
+    fase: str
+    descricao: str
+    ordem_avaliada: tuple[str, ...]
+    distancia_avaliada: float
+    melhor_ordem: tuple[str, ...]
+    melhor_distancia: float
+    sequencias_avaliadas: int
+    clientes_inacessiveis: tuple[str, ...] = ()
+
+
+# Nome descritivo equivalente para consumidores que preferem a nomenclatura
+# completa do algoritmo.
+EtapaCaixeiroViajante = EtapaTSP
+
+
+@dataclass(frozen=True, slots=True)
 class ResultadoCaixeiroViajante:
     """Resultado estruturado de uma execução exata do TSP.
 
@@ -46,6 +66,7 @@ class ResultadoCaixeiroViajante:
     quantidade_clientes_atendidos: int
     segmentos: tuple[SegmentoRota, ...] = ()
     clientes_inacessiveis: tuple[str, ...] = ()
+    etapas: tuple[EtapaTSP, ...] = ()
 
 
 def caixeiro_viajante(
@@ -53,6 +74,7 @@ def caixeiro_viajante(
     clientes: Iterable[str] | None = None,
     *,
     limite_clientes: int = LIMITE_PADRAO_CLIENTES,
+    registrar_etapas: bool = False,
 ) -> ResultadoCaixeiroViajante:
     """Encontra a rota ótima para todos ou para alguns clientes.
 
@@ -81,7 +103,37 @@ def caixeiro_viajante(
         )
 
     deposito_id = deposito.identificador
+    etapas: list[EtapaTSP] = []
+    if registrar_etapas:
+        etapas.append(
+            EtapaTSP(
+                numero=1,
+                fase="inicializacao",
+                descricao=(
+                    f"Início no depósito {deposito_id}; "
+                    f"clientes selecionados: {', '.join(clientes_ids) or 'nenhum'}."
+                ),
+                ordem_avaliada=(),
+                distancia_avaliada=inf,
+                melhor_ordem=(),
+                melhor_distancia=inf,
+                sequencias_avaliadas=0,
+            )
+        )
     if not clientes_ids:
+        if registrar_etapas:
+            etapas.append(
+                EtapaTSP(
+                    numero=len(etapas) + 1,
+                    fase="conclusao",
+                    descricao="Nenhum cliente foi selecionado; rota trivial no depósito.",
+                    ordem_avaliada=(deposito_id,),
+                    distancia_avaliada=0.0,
+                    melhor_ordem=(deposito_id,),
+                    melhor_distancia=0.0,
+                    sequencias_avaliadas=1,
+                )
+            )
         return ResultadoCaixeiroViajante(
             deposito=deposito_id,
             ordem_entregas=[deposito_id],
@@ -90,6 +142,7 @@ def caixeiro_viajante(
             encontrada=True,
             sequencias_avaliadas=1,
             quantidade_clientes_atendidos=0,
+            etapas=tuple(etapas),
         )
 
     # Uma execução por local relevante fornece todas as distâncias e caminhos
@@ -104,6 +157,23 @@ def caixeiro_viajante(
         if isinf(menores_caminhos[deposito_id].distancias[cliente])
     )
     if clientes_inacessiveis:
+        if registrar_etapas:
+            etapas.append(
+                EtapaTSP(
+                    numero=len(etapas) + 1,
+                    fase="conclusao",
+                    descricao=(
+                        "Rota inviável: clientes inacessíveis "
+                        f"({', '.join(clientes_inacessiveis)})."
+                    ),
+                    ordem_avaliada=(),
+                    distancia_avaliada=inf,
+                    melhor_ordem=(),
+                    melhor_distancia=inf,
+                    sequencias_avaliadas=0,
+                    clientes_inacessiveis=clientes_inacessiveis,
+                )
+            )
         return ResultadoCaixeiroViajante(
             deposito=deposito_id,
             ordem_entregas=[],
@@ -113,6 +183,7 @@ def caixeiro_viajante(
             sequencias_avaliadas=0,
             quantidade_clientes_atendidos=0,
             clientes_inacessiveis=clientes_inacessiveis,
+            etapas=tuple(etapas),
         )
 
     melhor_ordem: tuple[str, ...] | None = None
@@ -131,6 +202,28 @@ def caixeiro_viajante(
         if distancia < melhor_distancia:
             melhor_distancia = distancia
             melhor_ordem = ordem_clientes
+        if registrar_etapas:
+            ordem_formatada = " → ".join(paradas)
+            melhoria = " Nova melhor solução." if melhor_ordem == ordem_clientes else ""
+            etapas.append(
+                EtapaTSP(
+                    numero=len(etapas) + 1,
+                    fase="avaliacao",
+                    descricao=(
+                        f"Avaliada a ordem {ordem_formatada}: "
+                        f"{distancia:g} km.{melhoria}"
+                    ),
+                    ordem_avaliada=tuple(paradas),
+                    distancia_avaliada=distancia,
+                    melhor_ordem=(
+                        (deposito_id, *melhor_ordem, deposito_id)
+                        if melhor_ordem is not None
+                        else ()
+                    ),
+                    melhor_distancia=melhor_distancia,
+                    sequencias_avaliadas=sequencias_avaliadas,
+                )
+            )
 
     # Com clientes alcançáveis, permutations sempre produz ao menos uma ordem.
     if melhor_ordem is None:  # pragma: no cover - proteção defensiva
@@ -142,11 +235,28 @@ def caixeiro_viajante(
             encontrada=False,
             sequencias_avaliadas=sequencias_avaliadas,
             quantidade_clientes_atendidos=0,
+            etapas=tuple(etapas),
         )
 
     ordem_entregas = [deposito_id, *melhor_ordem, deposito_id]
     segmentos = _construir_segmentos(ordem_entregas, menores_caminhos)
     percurso_completo = _concatenar_segmentos(segmentos)
+    if registrar_etapas:
+        etapas.append(
+            EtapaTSP(
+                numero=len(etapas) + 1,
+                fase="conclusao",
+                descricao=(
+                    f"Conclusão: melhor rota {' → '.join(ordem_entregas)} "
+                    f"com {melhor_distancia:g} km."
+                ),
+                ordem_avaliada=tuple(ordem_entregas),
+                distancia_avaliada=melhor_distancia,
+                melhor_ordem=tuple(ordem_entregas),
+                melhor_distancia=melhor_distancia,
+                sequencias_avaliadas=sequencias_avaliadas,
+            )
+        )
 
     return ResultadoCaixeiroViajante(
         deposito=deposito_id,
@@ -157,6 +267,7 @@ def caixeiro_viajante(
         sequencias_avaliadas=sequencias_avaliadas,
         quantidade_clientes_atendidos=len(clientes_ids),
         segmentos=segmentos,
+        etapas=tuple(etapas),
     )
 
 

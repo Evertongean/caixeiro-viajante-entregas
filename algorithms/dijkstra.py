@@ -43,6 +43,9 @@ class EtapaDijkstra:
     predecessores: dict[str, str]
     arestas_analisadas: tuple[ArestaAnalisada, ...]
     atualizacoes: tuple[AtualizacaoDistancia, ...]
+    numero: int = 0
+    fase: str = "iteracao"
+    descricao: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +217,9 @@ def _executar(
             )
 
         if registrar_etapas:
+            descricao = _descrever_etapa(
+                atual, distancia_atual, arestas_analisadas, atualizacoes
+            )
             etapas.append(
                 EtapaDijkstra(
                     vertice_atual=atual,
@@ -223,6 +229,9 @@ def _executar(
                     predecessores=predecessores.copy(),
                     arestas_analisadas=tuple(arestas_analisadas),
                     atualizacoes=tuple(atualizacoes),
+                    numero=len(etapas) + 1,
+                    fase="iteracao",
+                    descricao=descricao,
                 )
             )
 
@@ -251,3 +260,28 @@ def _reconstruir_caminho(
 def _validar_grafo(grafo: Grafo) -> None:
     if not isinstance(grafo, Grafo):
         raise TypeError("É necessário fornecer uma instância de Grafo.")
+
+
+def _descrever_etapa(
+    atual: str,
+    distancia: float,
+    arestas: list[ArestaAnalisada],
+    atualizacoes: list[AtualizacaoDistancia],
+) -> str:
+    """Produz uma explicação curta sem mover a lógica do algoritmo para a UI."""
+    distancia_texto = "infinita" if isinf(distancia) else f"{distancia:g}"
+    if atualizacoes:
+        melhorias = ", ".join(
+            f"{atualizacao.vertice}={atualizacao.nova_distancia:g}"
+            for atualizacao in atualizacoes
+        )
+        return (
+            f"Processando {atual} (distância {distancia_texto}). "
+            f"Relaxamento: {melhorias}."
+        )
+    if arestas:
+        return (
+            f"Processando {atual} (distância {distancia_texto}); "
+            "nenhuma distância foi melhorada."
+        )
+    return f"Processando {atual} (distância {distancia_texto}); sem vizinhos novos."

@@ -56,6 +56,28 @@ class TestGrafo(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Já existe um vértice"):
             self.grafo.adicionar_vertice(duplicado)
 
+    def test_atualiza_vertice_preservando_suas_conexoes(self) -> None:
+        atualizado = self.grafo.atualizar_vertice(
+            "X",
+            nome="Novo cruzamento",
+            tipo=TipoVertice.CRUZAMENTO,
+            x=8,
+            y=9,
+        )
+        self.assertEqual(atualizado.nome, "Novo cruzamento")
+        self.assertEqual(self.grafo.obter_vizinhos("D")["X"], 2)
+        self.assertEqual(self.grafo.obter_vertice("X").x, 8)
+
+    def test_rejeita_nomes_duplicados_e_segundo_deposito(self) -> None:
+        with self.assertRaisesRegex(ValueError, "nome"):
+            self.grafo.adicionar_vertice(
+                Vertice("Z", "Cliente A", TipoVertice.CLIENTE, 1, 1)
+            )
+        with self.assertRaisesRegex(ValueError, "no máximo um depósito"):
+            self.grafo.adicionar_vertice(
+                Vertice("D2", "Outro depósito", TipoVertice.DEPOSITO, 1, 1)
+            )
+
     def test_rejeita_pesos_invalidos(self) -> None:
         for peso in (0, -1, float("inf"), float("nan"), True):
             with self.subTest(peso=peso):
@@ -111,9 +133,8 @@ class TestGrafo(unittest.TestCase):
 
     def test_nao_permite_dois_depositos_principais(self) -> None:
         outro = Vertice("D2", "Depósito 2", TipoVertice.DEPOSITO, 9, 9)
-        self.grafo.adicionar_vertice(outro)
-        with self.assertRaisesRegex(ValueError, "já foi definido"):
-            self.grafo.definir_deposito("D2")
+        with self.assertRaisesRegex(ValueError, "no máximo um depósito"):
+            self.grafo.adicionar_vertice(outro)
 
 
 if __name__ == "__main__":
