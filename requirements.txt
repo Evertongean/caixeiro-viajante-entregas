@@ -1,0 +1,1 @@
+# Esta etapa utiliza somente a biblioteca padrão do Python.
