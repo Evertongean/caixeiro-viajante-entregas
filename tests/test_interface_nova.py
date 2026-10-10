@@ -201,7 +201,10 @@ class TestNovaInterface(unittest.TestCase):
         self.assertEqual(janela.cartao_distancia.valor.text(), "6 km")
         self.assertEqual(janela.cartao_percurso.valor.text(), "D → X → A → B")
         self.assertEqual(
-            janela.cartao_clientes.valor.text(), "0 / 2 clientes atendidos"
+            janela.cartao_clientes.valor.text(), "0 / 2"
+        )
+        self.assertEqual(
+            janela.resultado_clientes.text(), "Clientes no percurso: A, B"
         )
         self.assertIn("pendentes", janela.cartao_status.valor.text())
 
@@ -215,8 +218,20 @@ class TestNovaInterface(unittest.TestCase):
             "D → X → A → B → C → D", janela.resultado_percurso.text()
         )
         self.assertEqual(
-            janela.cartao_clientes.valor.text(), "0 / 3 clientes atendidos"
+            janela.cartao_clientes.valor.text(), "0 / 3"
         )
+        self.assertEqual(
+            janela.resultado_clientes.text(), "Clientes selecionados: A, B, C"
+        )
+
+    def test_tsp_sem_clientes_mostra_erro_claro_sem_criar_rota(self) -> None:
+        janela = self.criar_janela()
+        janela.seletor_algoritmo.setCurrentIndex(1)
+        janela.selecionar_todos_clientes.setChecked(False)
+        janela.botao_calcular.click()
+        self.assertIsNone(janela.rota_calculada)
+        self.assertIn("pelo menos um cliente", janela.cartao_status.valor.text())
+        self.assertIn("pelo menos um cliente", janela.resultado_calibracao.text())
 
     def test_limpa_e_invalida_rota_apos_excluir_rua(self) -> None:
         janela = self.criar_janela()
@@ -274,9 +289,52 @@ class TestNovaInterface(unittest.TestCase):
         janela.resize(1100, 720)
         self.aplicacao.processEvents()
         tamanhos = janela.divisor.sizes()
-        self.assertGreaterEqual(tamanhos[1], 300)
-        self.assertGreaterEqual(janela.visualizacao.width(), 560)
-        self.assertGreaterEqual(janela.visualizacao.height(), 380)
+        self.assertGreaterEqual(tamanhos[1], 280)
+        self.assertGreaterEqual(janela.visualizacao.width(), 450)
+        self.assertGreaterEqual(janela.visualizacao.height(), 230)
+
+    def test_layout_responde_a_todos_os_tamanhos_alvo(self) -> None:
+        janela = self.criar_janela()
+        tamanhos = ((1920, 1080), (1366, 768), (1280, 720), (960, 640))
+        for largura, altura in tamanhos:
+            with self.subTest(tamanho=(largura, altura)):
+                janela.resize(largura, altura)
+                self.aplicacao.processEvents()
+                self.assertEqual(
+                    (janela.width(), janela.height()), (largura, altura)
+                )
+                self.assertGreaterEqual(janela.visualizacao.width(), 450)
+                self.assertGreaterEqual(janela.visualizacao.height(), 230)
+                self.assertGreaterEqual(janela.divisor.sizes()[1], 280)
+                self.assertGreater(
+                    janela.rolagem_controles.verticalScrollBar().maximum(), 0
+                )
+                esperadas = 2 if largura < 1180 else 4
+                self.assertEqual(janela._colunas_cartoes, esperadas)
+
+    def test_ferramenta_ativa_fica_visivel_e_exclusiva(self) -> None:
+        janela = self.criar_janela()
+        janela._modo_navegar()
+        self.assertTrue(janela.botao_navegar.isChecked())
+        janela._ativar_classificacao()
+        self.assertTrue(janela.botao_classificar.isChecked())
+        self.assertFalse(janela.botao_navegar.isChecked())
+        self.assertIn("Classificar superfície", janela.estado_ferramenta.text())
+        self.assertIn("manualmente", janela.instrucao_editor.text())
+
+    def test_sincronizacao_nao_recria_campos_quando_grafo_nao_mudou(self) -> None:
+        janela = self.criar_janela()
+        janela._sincronizar_cena()
+        primeiro_item = janela.lista_clientes.item(0)
+        janela._sincronizar_cena()
+        self.assertIs(janela.lista_clientes.item(0), primeiro_item)
+
+    def test_qml_evitaria_etiquetas_duplicadas_na_rota(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("function marcadorEstaNaRota", qml)
+        self.assertIn("!raiz.marcadorEstaNaRota(modelData.id)", qml)
 
     def test_projeto_invalido_nao_substitui_o_grafo_atual(self) -> None:
         janela = self.criar_janela()

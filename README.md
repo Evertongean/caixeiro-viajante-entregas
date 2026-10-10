@@ -18,6 +18,14 @@ e oferece câmera de perseguição.
 - backend gráfico Qt compatível com OpenGL, Vulkan, Metal ou Direct3D para a
   renderização 3D real.
 
+## Tecnologias
+
+- Python 3, com domínio e algoritmos independentes da interface;
+- PySide6/Qt Widgets para a janela e os controles;
+- Qt Quick 3D/QML para cena, picking, luzes, marcadores e destaques;
+- glTF 2.0/GLB e `pyside6-balsam` para os modelos 3D existentes;
+- JSON versionado para persistência e `unittest` para regressão automatizada.
+
 Instalação recomendada:
 
 ```bash
@@ -81,6 +89,10 @@ A janela possui três regiões:
 - painel de controles rolável à direita;
 - quatro cartões inferiores para distância, percurso, clientes e status.
 
+Os cartões usam quatro colunas nas larguras maiores e uma grade 2×2 em 960
+pixels. O painel lateral mantém rolagem vertical, sem comprimir a cena. O
+layout foi verificado em 1920×1080, 1366×768, 1280×720 e 960×640.
+
 Os controles da câmera, do enquadramento, da seção **Editar cidade**, do
 cálculo de rotas e da missão animada são funcionais.
 
@@ -106,7 +118,10 @@ O botão **Desfazer** remove primeiro a última curva e depois os extremos; o
 botão **Cancelar** descarta toda a prévia. Em **Navegar**, marcadores e linhas
 podem ser selecionados para edição, reposicionamento ou exclusão. Exclusões
 pedem confirmação. Azul identifica o depósito, verde identifica clientes,
-cinza identifica cruzamentos e laranja identifica a operação temporária.
+cinza identifica cruzamentos e laranja identifica a operação temporária. Nas
+ruas sobrepostas ao modelo, azul indica geometria calibrada e laranja indica
+geometria pendente ou selecionada. O painel informa permanentemente qual
+ferramenta está ativa e quantas ruas ainda precisam de calibração.
 
 Ao confirmar uma rua, o diálogo mostra o comprimento geométrico, o fator
 configurável em km/unidade e a sugestão resultante. O peso oficial continua
@@ -206,11 +221,27 @@ escura como sucesso.
 
 ## Núcleo matemático
 
+### Quatro conceitos que não devem ser confundidos
+
+- **Rua visual:** parte do modelo 3D que parece ser uma via. Como o GLB não
+  traz semântica confiável, ela só se torna trafegável após classificação
+  manual do usuário.
+- **Aresta do grafo:** conexão abstrata e não direcionada entre dois vértices.
+  É a estrutura consultada pelos algoritmos.
+- **Peso matemático:** distância oficial positiva, em quilômetros, atribuída à
+  aresta. É esse valor — não o comprimento visual — que Dijkstra e TSP somam.
+- **Traçado espacial:** polilinha 3D ordenada entre os extremos, incluindo as
+  curvas marcadas pelo usuário. Ela desenha o destaque e guia o carro, mas não
+  altera por conta própria o peso oficial.
+
 `models/grafo.py` mantém vértices, arestas, pesos e invariantes do grafo.
-`algorithms/dijkstra.py` encontra caminhos mínimos em
-`O((V + E) log V)`. `algorithms/caixeiro_viajante.py` avalia exatamente as
-permutações dos clientes, com custo fatorial `O(C! · C)` e limite padrão de
-oito clientes. As distâncias entre paradas do TSP são obtidas com Dijkstra.
+`algorithms/dijkstra.py` parte da origem, relaxa as arestas com uma fila de
+prioridade e reconstrói o caminho mínimo pelos predecessores, em
+`O((V + E) log V)`. Pesos negativos são proibidos pelo modelo.
+`algorithms/caixeiro_viajante.py` avalia exatamente as permutações dos clientes,
+com custo fatorial `O(C! · C)` e limite padrão de oito clientes. Para cada par
+de paradas, a distância e o caminho real são obtidos com Dijkstra; por isso a
+ordem de entregas pode ser menor que o percurso completo pelos cruzamentos.
 
 O cenário de demonstração confirma:
 
@@ -228,6 +259,50 @@ dos modelos não são incorporados ao JSON. Arquivos antigos de
 recebem uma disposição inicial aproximada e podem ser reposicionados sobre
 ruas classificadas. O carregamento é transacional: um JSON inválido não
 substitui o projeto aberto.
+
+## Roteiro reproduzível de demonstração acadêmica
+
+Este roteiro não depende de coordenadas prontas nem inventa ruas. Cada clique
+deve ser feito sobre uma via realmente visível na cidade carregada:
+
+1. execute `python3 gui_main.py` e aguarde o indicador **CENA 3D PRONTA**;
+2. use **Enquadrar** ou **Aérea** para localizar uma faixa contínua de asfalto;
+3. ative **Classificar superfície**, clique nessa faixa e confirme manualmente
+   **Rua trafegável**;
+4. ative **Definir depósito**, clique sobre a via e cadastre o depósito;
+5. ative **Adicionar cliente**, clique em outro ponto da mesma rede e cadastre
+   o primeiro cliente;
+6. repita a etapa anterior para os demais clientes desejados;
+7. crie os cruzamentos necessários com **Adicionar ponto**;
+8. em **Criar rua**, selecione dois marcadores conectados pela via real;
+9. clique ao longo da via para registrar cada curva visível; use **Desfazer**
+   se um ponto sair do asfalto;
+10. pressione **Confirmar**, compare comprimento geométrico e sugestão, informe
+    o peso oficial em quilômetros e salve a rua;
+11. repita as etapas 8–10 até obter uma rede conectada; confirme que as ruas
+    calibradas estão azuis e que o contador de pendências chegou a zero;
+12. escolha **Dijkstra**, defina origem/destino, calcule e confira distância,
+    percurso completo, clientes no percurso e destaque na cidade;
+13. limpe a rota, escolha **TSP**, marque clientes e confira separadamente a
+    ordem de atendimento e o percurso completo;
+14. inicie a missão, alterne câmera e velocidade, pause e confirme que o carro
+    fica imóvel; depois continue até entregas e retorno ao depósito;
+15. encerre a missão, salve o projeto em JSON, feche e abra o arquivo novamente;
+16. recalcule a rota e confirme que pontos, pesos, classificações, curvas e
+    calibrações persistiram.
+
+Se um clique cair em calçada, prédio ou superfície não classificada, o editor
+deve rejeitá-lo. Isso faz parte da demonstração: o sistema não afirma detectar
+ruas ou obstáculos automaticamente.
+
+## Limitações conhecidas
+
+- classificação de superfícies e confirmação de ausência de obstáculos são
+  decisões manuais;
+- o TSP é exato e propositalmente limitado a oito clientes;
+- a missão exige traçados espaciais confirmados para todos os trechos da rota;
+- a renderização 3D depende de driver/backend gráfico compatível com QRhi;
+- o projeto não contém navegação por GPS, tráfego dinâmico ou colisão física.
 
 ## Testes
 

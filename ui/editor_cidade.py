@@ -411,11 +411,12 @@ class EditorCidade3D:
                 geometria.pontos_intermediarios,
             )
             identificador = "|".join(chave)
-            cor = (
-                "#F59E0B"
-                if self.selecao == ("aresta", *chave)
-                else "#38BDF8"
-            )
+            if self.selecao == ("aresta", *chave):
+                cor = "#F59E0B"
+            elif geometria.calibrada_manualmente:
+                cor = "#38BDF8"
+            else:
+                cor = "#FB923C"
             segmentos.extend(self._segmentos(pontos, identificador, cor))
         return segmentos
 

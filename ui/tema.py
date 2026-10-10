@@ -47,6 +47,19 @@ QLabel#instrucaoEditor {
     border-radius: 8px;
     padding: 9px;
 }
+QLabel#estadoFerramenta {
+    color: #99F6E4;
+    background: #0B2B32;
+    border: 1px solid #1D665F;
+    border-radius: 7px;
+    padding: 6px 8px;
+    font-weight: 700;
+}
+QLabel#resumoEditor {
+    color: #A9BDD4;
+    font-size: 11px;
+    padding: 2px 3px;
+}
 QLabel#seloAplicacao {
     color: #78B9FF;
     background: #102A47;
@@ -113,6 +126,11 @@ QPushButton:hover {
 QPushButton:pressed {
     background: #112B45;
 }
+QPushButton:checked {
+    background: #146CC7;
+    border: 2px solid #73B7FF;
+    color: #FFFFFF;
+}
 QPushButton:disabled {
     color: #65778D;
     background: #111E2E;
@@ -134,7 +152,7 @@ QPushButton#botaoMissao:disabled {
     border-color: #70522A;
     color: #A99578;
 }
-QComboBox, QListWidget {
+QComboBox, QListWidget, QDoubleSpinBox {
     background: #0A1727;
     color: #EAF3FF;
     border: 1px solid #29445F;
@@ -169,7 +187,7 @@ QLabel#depositoTsp, QLabel#quantidadeClientes, QLabel#resultadoRota {
     border-radius: 7px;
     padding: 6px 8px;
 }
-QComboBox:disabled, QListWidget:disabled {
+QComboBox:disabled, QListWidget:disabled, QDoubleSpinBox:disabled {
     color: #687B91;
     background: #101B29;
 }

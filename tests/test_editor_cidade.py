@@ -8,7 +8,11 @@ import unittest
 from algorithms.caixeiro_viajante import caixeiro_viajante
 from algorithms.dijkstra import dijkstra
 from models.grafo import Grafo, TipoVertice
-from models.projeto_cidade import ClassificacaoSuperficie, ProjetoCidade
+from models.projeto_cidade import (
+    ClassificacaoSuperficie,
+    GeometriaRua,
+    ProjetoCidade,
+)
 from ui.editor_cidade import EditorCidade3D, ModoEditor
 
 
@@ -117,6 +121,15 @@ class TestEditorCidade3D(unittest.TestCase):
         self.editor.confirmar_rua(6, 0.5)
         self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 6)
         self.assertEqual(len(self.projeto.grafo.listar_arestas()), 1)
+
+    def test_rua_pendente_e_laranja_e_calibrada_e_azul(self) -> None:
+        self._criar_rede_minima()
+        self.projeto.grafo.adicionar_aresta("D", "C1", 4)
+        chave = self.projeto.chave_aresta("D", "C1")
+        self.projeto.ruas[chave] = GeometriaRua("D", "C1", [], False)
+        self.assertEqual(self.editor.segmentos_ruas_qml()[0]["cor"], "#FB923C")
+        self.projeto.ruas[chave].calibrada_manualmente = True
+        self.assertEqual(self.editor.segmentos_ruas_qml()[0]["cor"], "#38BDF8")
 
     def test_reposiciona_e_edita_vertice_preservando_conexoes(self) -> None:
         self._criar_rede_minima()

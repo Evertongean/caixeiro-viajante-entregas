@@ -5,9 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -105,6 +107,7 @@ class CartaoInformacao(QFrame):
 
     def definir(self, texto: str) -> None:
         self.valor.setText(texto)
+        self.valor.setToolTip(texto)
 
 
 class JanelaPrincipal(QMainWindow):
@@ -119,7 +122,7 @@ class JanelaPrincipal(QMainWindow):
         super().__init__()
         self.setObjectName("janelaPrincipal")
         self.setWindowTitle("Delivery Route — Simulador de Rotas")
-        self.setMinimumSize(1040, 700)
+        self.setMinimumSize(900, 600)
         self.resize(1440, 900)
         self.setStyleSheet(FOLHA_ESTILOS)
         self._primeira_exibicao = True
@@ -135,6 +138,10 @@ class JanelaPrincipal(QMainWindow):
         self.animacao_missao: AnimacaoMissao | None = None
         self._sessao_missao_ativa = False
         self._chave_visual_missao: tuple[object, ...] | None = None
+        self._assinatura_campos_grafo: (
+            tuple[tuple[str, str, str], ...] | None
+        ) = None
+        self._colunas_cartoes = 0
 
         raiz = QWidget()
         raiz.setObjectName("raizAplicacao")
@@ -152,7 +159,7 @@ class JanelaPrincipal(QMainWindow):
         self.divisor.setStretchFactor(0, 3)
         self.divisor.setStretchFactor(1, 1)
         layout_raiz.addWidget(self.divisor, 1)
-        layout_raiz.addLayout(self._criar_cartoes())
+        layout_raiz.addWidget(self._criar_cartoes())
 
         self.visualizacao.estado_alterado.connect(self._atualizar_estado_cena)
         self.visualizacao.camera_alterada.connect(self._camera_alterada)
@@ -194,7 +201,7 @@ class JanelaPrincipal(QMainWindow):
     ) -> QFrame:
         painel = QFrame()
         painel.setObjectName("painelCena")
-        painel.setMinimumWidth(620)
+        painel.setMinimumWidth(480)
         layout = _layout_sem_margem(painel)
 
         barra = QFrame()
@@ -209,8 +216,8 @@ class JanelaPrincipal(QMainWindow):
         barra_layout.addWidget(titulo)
         barra_layout.addWidget(self.estado_cena)
         barra_layout.addStretch(1)
-        self.botao_enquadrar = QPushButton("Enquadrar cidade")
-        self.botao_aerea = QPushButton("Visão aérea")
+        self.botao_enquadrar = QPushButton("Enquadrar")
+        self.botao_aerea = QPushButton("Aérea")
         self.botao_focar_carro = QPushButton("Focar carro")
         for botao in (
             self.botao_enquadrar,
@@ -242,7 +249,7 @@ class JanelaPrincipal(QMainWindow):
     def _criar_painel_controles(self) -> QFrame:
         painel = QFrame()
         painel.setObjectName("painelLateral")
-        painel.setMinimumWidth(310)
+        painel.setMinimumWidth(280)
         painel.setMaximumWidth(440)
         layout = _layout_sem_margem(painel)
         topo = QLabel("Controles")
@@ -250,9 +257,11 @@ class JanelaPrincipal(QMainWindow):
         topo.setContentsMargins(16, 16, 16, 2)
         layout.addWidget(topo)
 
-        rolagem = QScrollArea()
-        rolagem.setWidgetResizable(True)
-        rolagem.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.rolagem_controles = QScrollArea()
+        self.rolagem_controles.setWidgetResizable(True)
+        self.rolagem_controles.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         conteudo = QWidget()
         grupos = QVBoxLayout(conteudo)
         grupos.setContentsMargins(12, 4, 12, 14)
@@ -261,8 +270,8 @@ class JanelaPrincipal(QMainWindow):
         grupos.addWidget(self._grupo_rota())
         grupos.addWidget(self._grupo_missao())
         grupos.addStretch(1)
-        rolagem.setWidget(conteudo)
-        layout.addWidget(rolagem, 1)
+        self.rolagem_controles.setWidget(conteudo)
+        layout.addWidget(self.rolagem_controles, 1)
         return painel
 
     def _grupo_edicao(self) -> QGroupBox:
@@ -283,40 +292,54 @@ class JanelaPrincipal(QMainWindow):
             self.botao_criar_rua,
             self.botao_classificar,
         ]
+        self.grupo_ferramentas = QButtonGroup(self)
+        self.grupo_ferramentas.setExclusive(True)
         for botao in self.botoes_edicao:
+            botao.setCheckable(True)
+            self.grupo_ferramentas.addButton(botao)
             botao.setEnabled(False)
             layout.addWidget(botao)
+
+        self.estado_ferramenta = QLabel("Ferramenta ativa: aguardando a cena 3D")
+        self.estado_ferramenta.setObjectName("estadoFerramenta")
+        self.estado_ferramenta.setWordWrap(True)
+        layout.addWidget(self.estado_ferramenta)
 
         self.instrucao_editor = QLabel("Aguarde o carregamento da cidade 3D.")
         self.instrucao_editor.setObjectName("instrucaoEditor")
         self.instrucao_editor.setWordWrap(True)
         layout.addWidget(self.instrucao_editor)
 
-        operacao = QHBoxLayout()
+        self.resumo_editor = QLabel()
+        self.resumo_editor.setObjectName("resumoEditor")
+        self.resumo_editor.setWordWrap(True)
+        layout.addWidget(self.resumo_editor)
+
+        operacao = QGridLayout()
         self.botao_confirmar_edicao = QPushButton("Confirmar")
         self.botao_confirmar_edicao.setObjectName("botaoMissao")
         self.botao_desfazer_edicao = QPushButton("Desfazer")
         self.botao_cancelar_edicao = QPushButton("Cancelar")
-        for botao in (
-            self.botao_confirmar_edicao,
-            self.botao_desfazer_edicao,
-            self.botao_cancelar_edicao,
+        for indice, botao in enumerate(
+            (self.botao_confirmar_edicao, self.botao_desfazer_edicao)
         ):
             botao.setEnabled(False)
-            operacao.addWidget(botao)
+            operacao.addWidget(botao, 0, indice)
+        self.botao_cancelar_edicao.setEnabled(False)
+        operacao.addWidget(self.botao_cancelar_edicao, 1, 0, 1, 2)
         layout.addLayout(operacao)
 
-        selecao = QHBoxLayout()
+        selecao = QGridLayout()
         self.botao_editar_selecao = QPushButton("Editar")
         self.botao_reposicionar = QPushButton("Reposicionar")
         self.botao_excluir_selecao = QPushButton("Excluir")
-        for botao in (
-            self.botao_editar_selecao,
-            self.botao_reposicionar,
-            self.botao_excluir_selecao,
+        for indice, botao in enumerate(
+            (self.botao_editar_selecao, self.botao_reposicionar)
         ):
             botao.setEnabled(False)
-            selecao.addWidget(botao)
+            selecao.addWidget(botao, 0, indice)
+        self.botao_excluir_selecao.setEnabled(False)
+        selecao.addWidget(self.botao_excluir_selecao, 1, 0, 1, 2)
         layout.addLayout(selecao)
 
         arquivos = QHBoxLayout()
@@ -424,11 +447,15 @@ class JanelaPrincipal(QMainWindow):
         self.resultado_percurso = QLabel()
         self.resultado_percurso.setObjectName("resultadoRota")
         self.resultado_percurso.setWordWrap(True)
+        self.resultado_clientes = QLabel()
+        self.resultado_clientes.setObjectName("resultadoRota")
+        self.resultado_clientes.setWordWrap(True)
         self.resultado_calibracao = QLabel("Aguardando cálculo.")
         self.resultado_calibracao.setObjectName("notaFutura")
         self.resultado_calibracao.setWordWrap(True)
         layout.addWidget(self.resultado_ordem)
         layout.addWidget(self.resultado_percurso)
+        layout.addWidget(self.resultado_clientes)
         layout.addWidget(self.resultado_calibracao)
 
         self.seletor_algoritmo.currentIndexChanged.connect(
@@ -475,16 +502,16 @@ class JanelaPrincipal(QMainWindow):
         velocidade.addWidget(self.seletor_velocidade, 1)
         layout.addLayout(velocidade)
 
-        cameras = QHBoxLayout()
+        cameras = QGridLayout()
         self.botao_camera_livre = QPushButton("Câmera livre")
         self.botao_camera_atras = QPushButton("Atrás do carro")
         self.botao_camera_aerea_missao = QPushButton("Aérea")
         self.botao_camera_livre.setEnabled(False)
         self.botao_camera_atras.setEnabled(False)
         self.botao_camera_aerea_missao.setEnabled(False)
-        cameras.addWidget(self.botao_camera_livre)
-        cameras.addWidget(self.botao_camera_atras)
-        cameras.addWidget(self.botao_camera_aerea_missao)
+        cameras.addWidget(self.botao_camera_livre, 0, 0)
+        cameras.addWidget(self.botao_camera_atras, 0, 1)
+        cameras.addWidget(self.botao_camera_aerea_missao, 1, 0, 1, 2)
         layout.addLayout(cameras)
         ajustes_camera = QHBoxLayout()
         self.distancia_camera = QDoubleSpinBox()
@@ -729,8 +756,8 @@ class JanelaPrincipal(QMainWindow):
             )
             self._chave_visual_missao = chave
         self.cartao_distancia.definir(
-            f"{quadro.distancia_percorrida:.2f} / {rota.distancia_total:g} km · "
-            f"restam {quadro.distancia_restante:.2f}"
+            f"{rota.distancia_total:g} km · {quadro.distancia_percorrida:.2f} perc. · "
+            f"{quadro.distancia_restante:.2f} rest."
         )
         self.cartao_percurso.definir(
             f"{' → '.join(rota.percurso_completo)} · atual: "
@@ -738,8 +765,7 @@ class JanelaPrincipal(QMainWindow):
             f"({quadro.indice_aresta + 1}/{len(rota.segmentos_espaciais)})"
         )
         self.cartao_clientes.definir(
-            f"{len(quadro.clientes_atendidos)} / {quadro.total_clientes} "
-            "clientes atendidos"
+            f"{len(quadro.clientes_atendidos)} / {quadro.total_clientes}"
         )
         if quadro.estado is EstadoMissao.PAUSADA:
             status = "Missão pausada."
@@ -860,7 +886,12 @@ class JanelaPrincipal(QMainWindow):
                     raise ValueError("Selecione uma origem e um destino válidos.")
                 rota = calcular_dijkstra(self.projeto, str(origem), str(destino))
             elif algoritmo == AlgoritmoRota.TSP.value:
-                rota = calcular_tsp(self.projeto, self._clientes_selecionados())
+                clientes = self._clientes_selecionados()
+                if not clientes:
+                    raise ValueError(
+                        "Selecione pelo menos um cliente para calcular a rota TSP."
+                    )
+                rota = calcular_tsp(self.projeto, clientes)
             else:
                 raise ValueError("Selecione um algoritmo de rota válido.")
         except (KeyError, TypeError, ValueError) as erro:
@@ -868,9 +899,10 @@ class JanelaPrincipal(QMainWindow):
             self.visualizacao.limpar_destaque_rota()
             self.cartao_distancia.definir("—")
             self.cartao_percurso.definir("Nenhuma rota disponível")
-            self.cartao_clientes.definir("0 / 0 clientes atendidos")
+            self.cartao_clientes.definir("0 / 0")
             self.resultado_ordem.setText("")
             self.resultado_percurso.setText("")
+            self.resultado_clientes.setText("")
             self.resultado_calibracao.setText(str(erro))
             status = (
                 "Destino inacessível."
@@ -893,13 +925,24 @@ class JanelaPrincipal(QMainWindow):
         self.cartao_distancia.definir(f"{rota.distancia_total:g} km")
         self.cartao_percurso.definir(percurso)
         quantidade = len(rota.clientes_selecionados)
-        self.cartao_clientes.definir(f"0 / {quantidade} clientes atendidos")
+        self.cartao_clientes.definir(f"0 / {quantidade}")
         if rota.ordem_atendimento:
             ordem = " → ".join(rota.ordem_atendimento)
             self.resultado_ordem.setText(f"Ordem de atendimento: {ordem}")
         else:
             self.resultado_ordem.setText("")
         self.resultado_percurso.setText(f"Percurso completo: {percurso}")
+        if rota.algoritmo is AlgoritmoRota.TSP:
+            clientes = ", ".join(rota.clientes_selecionados)
+            self.resultado_clientes.setText(f"Clientes selecionados: {clientes}")
+        else:
+            clientes_no_percurso = [
+                identificador
+                for identificador in rota.percurso_completo
+                if self.grafo.obter_vertice(identificador).tipo is TipoVertice.CLIENTE
+            ]
+            texto = ", ".join(clientes_no_percurso) or "nenhum"
+            self.resultado_clientes.setText(f"Clientes no percurso: {texto}")
         if rota.estado_espacial is EstadoEspacial.COMPLETO:
             self.resultado_calibracao.setText(
                 "Todos os trechos possuem traçado espacial confirmado manualmente."
@@ -936,10 +979,11 @@ class JanelaPrincipal(QMainWindow):
         self.visualizacao.limpar_destaque_rota()
         self.cartao_distancia.definir("—")
         self.cartao_percurso.definir("Nenhuma rota calculada")
-        self.cartao_clientes.definir("0 / 0 clientes atendidos")
+        self.cartao_clientes.definir("0 / 0")
         self.cartao_status.definir(status)
         self.resultado_ordem.setText("")
         self.resultado_percurso.setText("")
+        self.resultado_clientes.setText("")
         self.resultado_calibracao.setText(status)
         self.botao_limpar_rota.setEnabled(False)
         self.botao_enquadrar_rota.setEnabled(False)
@@ -965,8 +1009,19 @@ class JanelaPrincipal(QMainWindow):
         algoritmo = self.seletor_algoritmo.currentData()
         if algoritmo == AlgoritmoRota.DIJKSTRA.value:
             disponivel = self.origem.count() > 0 and self.destino.count() > 0
+            motivo = (
+                "Selecione uma origem e um destino."
+                if not disponivel
+                else "Calcula o menor caminho entre os pontos selecionados."
+            )
         else:
             disponivel = self.grafo.obter_deposito() is not None
+            motivo = (
+                "Cadastre um depósito antes de calcular a rota TSP."
+                if not disponivel
+                else "Selecione ao menos um cliente e calcule a rota de entregas."
+            )
+        self.botao_calcular.setToolTip(motivo)
         self.botao_calcular.setEnabled(
             disponivel and not self._calculando_rota and not self._sessao_missao_ativa
         )
@@ -974,13 +1029,19 @@ class JanelaPrincipal(QMainWindow):
     def _definir_instrucao(self, texto: str) -> None:
         self.instrucao_editor.setText(texto)
 
+    def _marcar_ferramenta(self, botao: QPushButton, nome: str) -> None:
+        botao.setChecked(True)
+        self.estado_ferramenta.setText(f"Ferramenta ativa: {nome}")
+
     def _modo_navegar(self) -> None:
         self.editor.definir_modo(ModoEditor.NAVEGAR)
         self.visualizacao.definir_modo_interacao(ModoEditor.NAVEGAR.value)
         self.visualizacao.mostrar_marcador_temporario(None)
         self.visualizacao.atualizar_previa_rua([])
+        self._marcar_ferramenta(self.botao_navegar, "Navegar")
         self._definir_instrucao(
-            "Navegação ativa. Clique em um marcador ou rua para selecioná-lo."
+            "Clique em um marcador ou rua para selecionar. Use Editar, Reposicionar "
+            "ou Excluir; Cancelar encerra qualquer operação em curso."
         )
         self._atualizar_botoes_operacao()
 
@@ -993,16 +1054,24 @@ class JanelaPrincipal(QMainWindow):
             TipoVertice.CLIENTE: "um cliente",
             TipoVertice.DEPOSITO: "o depósito",
         }.get(tipo, "um ponto")
+        botao = {
+            TipoVertice.CLIENTE: self.botao_adicionar_cliente,
+            TipoVertice.DEPOSITO: self.botao_definir_deposito,
+        }.get(tipo, self.botao_adicionar_ponto)
+        self._marcar_ferramenta(botao, botao.text())
         self._definir_instrucao(
-            f"Selecione sobre uma superfície classificada como rua para adicionar {descricao}."
+            "Clique sobre uma superfície previamente classificada como rua para "
+            f"adicionar {descricao}. Cancelar volta à navegação."
         )
         self._atualizar_botoes_operacao()
 
     def _ativar_criacao_rua(self) -> None:
         self.editor.iniciar_rua()
         self.visualizacao.definir_modo_interacao(ModoEditor.CRIAR_RUA.value)
+        self._marcar_ferramenta(self.botao_criar_rua, "Criar rua")
         self._definir_instrucao(
-            "Selecione o ponto inicial da rua ou clique no asfalto para criá-lo."
+            "Selecione o ponto inicial e o final. Depois clique no asfalto para traçar "
+            "curvas; Desfazer remove a última etapa e Cancelar abandona a operação."
         )
         self._sincronizar_cena()
         self._atualizar_botoes_operacao()
@@ -1012,8 +1081,10 @@ class JanelaPrincipal(QMainWindow):
         self.visualizacao.definir_modo_interacao(
             ModoEditor.CLASSIFICAR_SUPERFICIE.value
         )
+        self._marcar_ferramenta(self.botao_classificar, "Classificar superfície")
         self._definir_instrucao(
-            "Clique em uma malha para classificá-la como rua, calçada ou área bloqueada."
+            "Clique em uma malha e confirme manualmente se ela é rua, calçada ou área "
+            "bloqueada. A aparência do modelo não é interpretada automaticamente."
         )
         self._atualizar_botoes_operacao()
 
@@ -1060,8 +1131,27 @@ class JanelaPrincipal(QMainWindow):
                 marcadores_rota_qml(self.rota_calculada, self.projeto),
             )
         self._atualizar_campos_grafo()
+        calibradas = sum(
+            geometria.calibrada_manualmente for geometria in self.projeto.ruas.values()
+        )
+        total_ruas = len(self.projeto.ruas)
+        superficies_rua = sum(
+            classificacao.value == "rua"
+            for classificacao in self.projeto.superficies.values()
+        )
+        self.resumo_editor.setText(
+            f"Superfícies rua: {superficies_rua} · ruas calibradas: {calibradas} · "
+            f"pendentes: {total_ruas - calibradas}\n"
+            "Azul = calibrada · laranja = pendente/selecionada"
+        )
 
-    def _atualizar_campos_grafo(self) -> None:
+    def _atualizar_campos_grafo(self, *, force: bool = False) -> None:
+        assinatura = tuple(
+            (vertice.identificador, vertice.nome, vertice.tipo.value)
+            for vertice in self.grafo.listar_vertices()
+        )
+        if not force and assinatura == self._assinatura_campos_grafo:
+            return
         clientes_anteriores = {
             str(self.lista_clientes.item(indice).data(Qt.ItemDataRole.UserRole))
             for indice in range(self.lista_clientes.count())
@@ -1101,6 +1191,7 @@ class JanelaPrincipal(QMainWindow):
             else "Nenhum depósito cadastrado"
         )
         self._atualizando_campos_rota = False
+        self._assinatura_campos_grafo = assinatura
         self._atualizar_resumo_clientes()
         self._atualizar_disponibilidade_calculo()
 
@@ -1197,10 +1288,18 @@ class JanelaPrincipal(QMainWindow):
                 self,
             )
             if dialogo.exec() == QDialog.DialogCode.Accepted:
-                self.editor.classificar_superficie(referencia, dialogo.valor())
+                classificacao = dialogo.valor()
+                self.editor.classificar_superficie(referencia, classificacao)
+                nomes = {
+                    "rua": "rua trafegável",
+                    "calcada": "calçada",
+                    "bloqueada": "área bloqueada",
+                    "nao_classificada": "não classificada",
+                }
                 self._definir_instrucao(
-                    f"Superfície classificada como {dialogo.valor().value}."
+                    f"Classificação manual salva: {nomes[classificacao.value]}."
                 )
+                self._sincronizar_cena()
             return
 
         if modo not in {
@@ -1395,6 +1494,7 @@ class JanelaPrincipal(QMainWindow):
         origem, destino = selecao[1], selecao[2]
         self.editor.iniciar_rua(origem, destino, editar=True)
         self.visualizacao.definir_modo_interacao(ModoEditor.CRIAR_RUA.value)
+        self._marcar_ferramenta(self.botao_criar_rua, "Editar rua")
         self._definir_instrucao(
             "Edite o traçado: adicione curvas, desfaça pontos ou confirme para alterar o peso."
         )
@@ -1410,6 +1510,11 @@ class JanelaPrincipal(QMainWindow):
         self.visualizacao.definir_modo_interacao(
             ModoEditor.REPOSICIONAR_VERTICE.value
         )
+        self.grupo_ferramentas.setExclusive(False)
+        for botao in self.botoes_edicao:
+            botao.setChecked(False)
+        self.grupo_ferramentas.setExclusive(True)
+        self.estado_ferramenta.setText("Ferramenta ativa: Reposicionar")
         self._definir_instrucao(
             f"Clique no novo local sobre o asfalto para reposicionar {selecao[1]}."
         )
@@ -1488,6 +1593,7 @@ class JanelaPrincipal(QMainWindow):
         self.projeto = carregado
         self.grafo = carregado.grafo
         self.editor = EditorCidade3D(carregado)
+        self._assinatura_campos_grafo = None
         self.caminho_projeto = Path(caminho)
         self.limpar_rota(status="Projeto carregado. Calcule uma nova rota.")
         self._atualizando_campos_rota = True
@@ -1514,9 +1620,12 @@ class JanelaPrincipal(QMainWindow):
         self._definir_instrucao(mensagem)
         self.cartao_status.definir(mensagem)
 
-    def _criar_cartoes(self) -> QHBoxLayout:
-        layout = QHBoxLayout()
-        layout.setSpacing(12)
+    def _criar_cartoes(self) -> QWidget:
+        recipiente = QWidget()
+        self.layout_cartoes = QGridLayout(recipiente)
+        self.layout_cartoes.setContentsMargins(0, 0, 0, 0)
+        self.layout_cartoes.setHorizontalSpacing(12)
+        self.layout_cartoes.setVerticalSpacing(10)
         self.cartao_distancia = CartaoInformacao(
             "↔", "Distância total", "—", "valorDistancia"
         )
@@ -1529,14 +1638,23 @@ class JanelaPrincipal(QMainWindow):
         self.cartao_status = CartaoInformacao(
             "●", "Status", "Preparando cena 3D", "valorStatus"
         )
-        for cartao in (
+        self.cartoes = (
             self.cartao_distancia,
             self.cartao_percurso,
             self.cartao_clientes,
             self.cartao_status,
-        ):
-            layout.addWidget(cartao, 1)
-        return layout
+        )
+        self._organizar_cartoes(4)
+        return recipiente
+
+    def _organizar_cartoes(self, colunas: int) -> None:
+        if colunas == self._colunas_cartoes:
+            return
+        self._colunas_cartoes = colunas
+        for indice, cartao in enumerate(self.cartoes):
+            self.layout_cartoes.addWidget(cartao, indice // colunas, indice % colunas)
+        for coluna in range(4):
+            self.layout_cartoes.setColumnStretch(coluna, 1 if coluna < colunas else 0)
 
     def _atualizar_estado_cena(self, mensagem: str, ok: bool) -> None:
         resumo = mensagem
@@ -1553,6 +1671,12 @@ class JanelaPrincipal(QMainWindow):
         elif "Inicializando" in mensagem:
             resumo = "Inicializando 3D…"
         self.estado_cena.setText(resumo)
+        self.estado_cena.setToolTip(mensagem)
+        if not ok:
+            self._definir_instrucao(
+                "Não foi possível preparar a cena 3D. Confira o backend gráfico e "
+                "passe o mouse sobre o indicador da cena para ver o diagnóstico."
+            )
         if not self._editor_inicializado:
             self.cartao_status.definir(resumo)
         pronto = ok and (
@@ -1598,11 +1722,20 @@ class JanelaPrincipal(QMainWindow):
             largura = max(self.divisor.width(), 1000)
             self.divisor.setSizes([int(largura * 0.75), int(largura * 0.25)])
 
+    def resizeEvent(self, evento: QResizeEvent) -> None:  # noqa: N802 - API Qt
+        super().resizeEvent(evento)
+        if hasattr(self, "cartoes"):
+            self._organizar_cartoes(4 if evento.size().width() >= 1180 else 2)
+
     def closeEvent(self, evento: QCloseEvent) -> None:  # noqa: N802 - API Qt
         if self.animacao_missao is not None:
             self.animacao_missao.timer.stop()
             if self.controlador_missao is not None:
                 self.controlador_missao.encerrar()
+            self.animacao_missao.deleteLater()
+        self.animacao_missao = None
+        self.controlador_missao = None
+        self._sessao_missao_ativa = False
         evento.accept()
 
 

@@ -97,6 +97,14 @@ Item {
         return Qt.vector3d(pitch, yaw, 0)
     }
 
+    function marcadorEstaNaRota(identificador) {
+        for (let indice = 0; indice < marcadoresRota.length; ++indice) {
+            if (marcadoresRota[indice].id === identificador)
+                return true
+        }
+        return false
+    }
+
     Rectangle {
         anchors.fill: parent
         color: "#07111f"
@@ -346,7 +354,9 @@ Item {
             x: projetado.x - width / 2 + raiz.cameraYaw * 0
             y: projetado.y - height + raiz.cameraPitch * 0
             z: 20
-            visible: projetado.z > 0 && raiz.cameraModo !== "atras_do_carro"
+            visible: projetado.z > 0
+                     && raiz.cameraModo !== "atras_do_carro"
+                     && !raiz.marcadorEstaNaRota(modelData.id)
             width: textoMarcador.implicitWidth + 16
             height: 24
             radius: 7

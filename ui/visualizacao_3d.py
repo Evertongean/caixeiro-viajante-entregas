@@ -53,7 +53,7 @@ class Visualizacao3D(QQuickWidget):
         self.setObjectName("visualizacao3D")
         self.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
         self.setClearColor("#07111f")
-        self.setMinimumSize(560, 380)
+        self.setMinimumSize(450, 230)
         self.setMouseTracking(True)
 
         self.caminho_cidade = Path(
