@@ -6,12 +6,27 @@ from models.projeto_cidade import ProjetoCidade
 from models.rota import RotaCalculada
 
 
-def segmentos_rota_qml(rota: RotaCalculada) -> list[dict[str, object]]:
+def segmentos_rota_qml(
+    rota: RotaCalculada,
+    indice_atual: int | None = None,
+    *,
+    concluida: bool = False,
+) -> list[dict[str, object]]:
     segmentos: list[dict[str, object]] = []
     for trecho in rota.segmentos_espaciais:
         if not trecho.disponivel:
             continue
-        cor = "#22D3EE" if trecho.confirmado_manualmente else "#F59E0B"
+        estado = "restante"
+        if concluida or (indice_atual is not None and trecho.indice < indice_atual):
+            estado = "percorrido"
+        elif indice_atual is not None and trecho.indice == indice_atual:
+            estado = "atual"
+        if estado == "percorrido":
+            cor = "#64748B"
+        elif estado == "atual":
+            cor = "#FBBF24"
+        else:
+            cor = "#22D3EE" if trecho.confirmado_manualmente else "#F59E0B"
         for curva, (inicio, fim) in enumerate(zip(trecho.pontos, trecho.pontos[1:])):
             segmentos.append(
                 {
@@ -20,6 +35,7 @@ def segmentos_rota_qml(rota: RotaCalculada) -> list[dict[str, object]]:
                     "origem": trecho.origem,
                     "destino": trecho.destino,
                     "confirmado": trecho.confirmado_manualmente,
+                    "estado": estado,
                     "cor": cor,
                     "ax": inicio[0],
                     "ay": inicio[1] + 0.034,
@@ -33,8 +49,12 @@ def segmentos_rota_qml(rota: RotaCalculada) -> list[dict[str, object]]:
 
 
 def marcadores_rota_qml(
-    rota: RotaCalculada, projeto: ProjetoCidade
+    rota: RotaCalculada,
+    projeto: ProjetoCidade,
+    clientes_atendidos: set[str] | frozenset[str] | None = None,
+    proximo_cliente: str | None = None,
 ) -> list[dict[str, object]]:
+    atendidos = clientes_atendidos or set()
     destaques: dict[str, dict[str, object]] = {}
 
     def adicionar(identificador: str, texto: str, cor: str) -> None:
@@ -66,7 +86,13 @@ def marcadores_rota_qml(
         if identificador in rota.clientes_selecionados
     ]
     for indice, identificador in enumerate(ordem_clientes, start=1):
-        adicionar(identificador, f"ENTREGA {indice}", "#2DD4BF")
+        if identificador in atendidos:
+            texto, cor = f"ENTREGA {indice} · OK", "#64748B"
+        elif identificador == proximo_cliente:
+            texto, cor = f"PRÓXIMA · ENTREGA {indice}", "#FBBF24"
+        else:
+            texto, cor = f"ENTREGA {indice}", "#2DD4BF"
+        adicionar(identificador, texto, cor)
     if not ordem_clientes:
         for identificador in rota.clientes_selecionados:
             adicionar(identificador, "CLIENTE", "#2DD4BF")

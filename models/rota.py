@@ -1,4 +1,4 @@
-"""Resultado de rota compartilhado pela visualização e pela futura missão 3D."""
+"""Resultado de rota compartilhado pela visualização e pela missão 3D."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ class SegmentoEspacialRota:
 
 @dataclass(frozen=True, slots=True)
 class RotaCalculada:
-    """Estado imutável pronto para ser consumido pelo futuro modo Missão 3D."""
+    """Estado imutável consumido pelo destaque visual e pelo modo Missão 3D."""
 
     algoritmo: AlgoritmoRota
     origem: str

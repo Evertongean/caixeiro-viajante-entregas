@@ -133,6 +133,23 @@ class TestRotaIntegrada(unittest.TestCase):
         self.assertEqual(por_id["A"]["texto"], "ENTREGA 1")
         self.assertGreaterEqual(len(pontos_para_enquadrar(rota, self.projeto)), 5)
 
+    def test_apresentacao_da_missao_distingue_trecho_e_entrega(self) -> None:
+        self.configurar_percurso_demonstracao()
+        rota = calcular_tsp(self.projeto, ["A", "B", "C"])
+        segmentos = segmentos_rota_qml(rota, 2)
+        estados = {
+            item["sequencia"]: item["estado"] for item in segmentos
+        }
+        self.assertEqual(estados[0], "percorrido")
+        self.assertEqual(estados[2], "atual")
+        self.assertEqual(estados[4], "restante")
+        marcadores = marcadores_rota_qml(
+            rota, self.projeto, {"A"}, "B"
+        )
+        por_id = {item["id"]: item for item in marcadores}
+        self.assertIn("OK", por_id["A"]["texto"])
+        self.assertIn("PRÓXIMA", por_id["B"]["texto"])
+
     def test_destino_inacessivel_e_grafo_desconectado(self) -> None:
         self.projeto.grafo.remover_aresta("B", "C")
         self.projeto.grafo.remover_aresta("C", "D")

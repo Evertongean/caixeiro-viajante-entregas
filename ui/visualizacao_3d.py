@@ -21,6 +21,12 @@ from .assets_3d import (
     inspecionar_modelo,
 )
 from .camera_orbital import CameraOrbital, ModoCamera
+from .camera_seguidora import CameraSeguidora
+
+
+# O GLB foi inspecionado por malha/material: grade e para-choque dianteiros
+# estão no extremo -Z. O yaw da rota usa +Z como zero, logo o asset requer 180°.
+CORRECAO_FRONTAL_CARRO_GRAUS = 180.0
 
 
 class ErroRenderizacao3D(RuntimeError):
@@ -58,9 +64,11 @@ class Visualizacao3D(QQuickWidget):
         ).resolve()
         self.conversor = conversor
         self.camera = CameraOrbital()
+        self.camera_seguidora = CameraSeguidora()
         self.info_cidade: InformacoesModelo3D | None = None
         self.info_carro: InformacoesModelo3D | None = None
         self.posicao_carro = (0.0, 0.0, 0.0)
+        self.orientacao_carro = 0.0
         self.escala_cidade = ESCALA_CIDADE_PADRAO
         self.escala_carro = ESCALA_CARRO_PADRAO
         self.inicializado = False
@@ -198,6 +206,9 @@ class Visualizacao3D(QQuickWidget):
             raiz.setProperty("centroModeloCarro", QVector3D(*carro.centro))
             raiz.setProperty("minimoModeloCarro", QVector3D(*carro.minimo))
             raiz.setProperty("alturaCarro", 0.008)
+            self.atualizar_carro(
+                self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
+            )
 
     def _aplicar_camera(self) -> None:
         raiz = self.rootObject()
@@ -249,7 +260,46 @@ class Visualizacao3D(QQuickWidget):
 
     def camera_atras_do_carro(self) -> None:
         self.camera.preparar_camera_atras_do_carro(self.posicao_carro)
+        self.camera_seguidora.reiniciar()
+        self.atualizar_carro(
+            self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
+        )
         self._aplicar_camera()
+
+    def atualizar_carro(
+        self,
+        posicao: Sequence[float],
+        orientacao_graus: float,
+        delta_segundos: float = 0.0,
+        *,
+        imediato: bool = False,
+    ) -> None:
+        if len(posicao) != 3:
+            raise ValueError("A posição do carro deve possuir três coordenadas.")
+        self.posicao_carro = tuple(float(valor) for valor in posicao)
+        self.orientacao_carro = float(orientacao_graus)
+        camera, alvo = self.camera_seguidora.atualizar(
+            self.posicao_carro,
+            self.orientacao_carro,
+            float(delta_segundos),
+            imediato=imediato,
+        )
+        raiz = self.rootObject()
+        if raiz is None:
+            return
+        raiz.setProperty("posicaoCarro", QVector3D(*self.posicao_carro))
+        raiz.setProperty(
+            "rotacaoCarro",
+            self.orientacao_carro + CORRECAO_FRONTAL_CARRO_GRAUS,
+        )
+        raiz.setProperty("cameraSeguimentoPosicao", QVector3D(*camera))
+        raiz.setProperty("cameraSeguimentoAlvo", QVector3D(*alvo))
+
+    def configurar_camera_seguidora(self, distancia: float, altura: float) -> None:
+        self.camera_seguidora.configurar(distancia=distancia, altura=altura)
+        self.atualizar_carro(
+            self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
+        )
 
     def definir_modo_interacao(self, modo: str) -> None:
         if modo not in {

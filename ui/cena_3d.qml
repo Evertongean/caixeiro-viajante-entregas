@@ -26,6 +26,8 @@ Item {
     property real cameraPitch: 0.58
     property real cameraDistancia: 4.0
     property string cameraModo: "livre"
+    property vector3d cameraSeguimentoPosicao: Qt.vector3d(0, 0.24, 0.42)
+    property vector3d cameraSeguimentoAlvo: Qt.vector3d(0, 0, 0)
     property vector3d posicaoCarro: Qt.vector3d(0, 0, 0)
     property vector3d centroModeloCarro: Qt.vector3d(0, 0, 0)
     property vector3d minimoModeloCarro: Qt.vector3d(0, 0, 0)
@@ -118,7 +120,7 @@ Item {
             id: alvoCamera
             objectName: "alvoCamera"
             position: raiz.cameraModo === "atras_do_carro"
-                ? raiz.posicaoCarro
+                ? raiz.cameraSeguimentoAlvo
                 : raiz.centroCamera
         }
 
@@ -126,11 +128,7 @@ Item {
             id: cameraPrincipal
             objectName: "cameraPrincipal"
             position: raiz.cameraModo === "atras_do_carro"
-                ? Qt.vector3d(
-                    raiz.posicaoCarro.x,
-                    raiz.posicaoCarro.y + 0.24,
-                    raiz.posicaoCarro.z + 0.42
-                )
+                ? raiz.cameraSeguimentoPosicao
                 : Qt.vector3d(
                     raiz.centroCamera.x
                         + Math.cos(raiz.cameraYaw) * Math.cos(raiz.cameraPitch)
@@ -174,22 +172,29 @@ Item {
             }
         }
 
-        Loader3D {
-            id: carroLoader
-            objectName: "carroLoader"
-            source: raiz.carroFonte
+        Node {
+            id: transformacaoCarro
+            objectName: "transformacaoCarro"
             position: Qt.vector3d(
-                raiz.posicaoCarro.x
-                    - raiz.centroModeloCarro.x * raiz.escalaCarro,
-                raiz.posicaoCarro.y + raiz.alturaCarro
-                    - raiz.minimoModeloCarro.y * raiz.escalaCarro,
+                raiz.posicaoCarro.x,
+                raiz.posicaoCarro.y + raiz.alturaCarro,
                 raiz.posicaoCarro.z
-                    - raiz.centroModeloCarro.z * raiz.escalaCarro
-            )
-            scale: Qt.vector3d(
-                raiz.escalaCarro, raiz.escalaCarro, raiz.escalaCarro
             )
             eulerRotation: Qt.vector3d(0, raiz.rotacaoCarro, 0)
+
+            Loader3D {
+                id: carroLoader
+                objectName: "carroLoader"
+                source: raiz.carroFonte
+                position: Qt.vector3d(
+                    -raiz.centroModeloCarro.x * raiz.escalaCarro,
+                    -raiz.minimoModeloCarro.y * raiz.escalaCarro,
+                    -raiz.centroModeloCarro.z * raiz.escalaCarro
+                )
+                scale: Qt.vector3d(
+                    raiz.escalaCarro, raiz.escalaCarro, raiz.escalaCarro
+                )
+            }
         }
 
         Repeater3D {
@@ -255,9 +260,13 @@ Item {
                 )
                 materials: PrincipledMaterial {
                     baseColor: segmentoRota.modelData.cor
-                    emissiveFactor: segmentoRota.modelData.confirmado
-                        ? Qt.vector3d(0.18, 0.72, 0.95)
-                        : Qt.vector3d(0.78, 0.30, 0.03)
+                    emissiveFactor: segmentoRota.modelData.estado === "atual"
+                        ? Qt.vector3d(0.95, 0.48, 0.04)
+                        : segmentoRota.modelData.estado === "percorrido"
+                            ? Qt.vector3d(0.14, 0.25, 0.32)
+                            : segmentoRota.modelData.confirmado
+                                ? Qt.vector3d(0.18, 0.72, 0.95)
+                                : Qt.vector3d(0.78, 0.30, 0.03)
                     roughness: 0.18
                 }
             }
@@ -274,7 +283,9 @@ Item {
                 position: Qt.vector3d(
                     modelData.x, modelData.y + 0.045, modelData.z
                 )
-                scale: Qt.vector3d(0.00042, 0.00042, 0.00042)
+                scale: raiz.cameraModo === "atras_do_carro"
+                    ? Qt.vector3d(0.00012, 0.00012, 0.00012)
+                    : Qt.vector3d(0.00042, 0.00042, 0.00042)
                 materials: PrincipledMaterial {
                     baseColor: marcador3D.modelData.cor
                     emissiveFactor: Qt.vector3d(0.16, 0.16, 0.16)
@@ -294,7 +305,9 @@ Item {
                 position: Qt.vector3d(
                     modelData.x, modelData.y + 0.048, modelData.z
                 )
-                scale: Qt.vector3d(0.00062, 0.00062, 0.00062)
+                scale: raiz.cameraModo === "atras_do_carro"
+                    ? Qt.vector3d(0.00018, 0.00018, 0.00018)
+                    : Qt.vector3d(0.00062, 0.00062, 0.00062)
                 materials: PrincipledMaterial {
                     baseColor: marcadorRota3D.modelData.cor
                     emissiveFactor: Qt.vector3d(0.35, 0.55, 0.60)
@@ -333,7 +346,7 @@ Item {
             x: projetado.x - width / 2 + raiz.cameraYaw * 0
             y: projetado.y - height + raiz.cameraPitch * 0
             z: 20
-            visible: projetado.z > 0
+            visible: projetado.z > 0 && raiz.cameraModo !== "atras_do_carro"
             width: textoMarcador.implicitWidth + 16
             height: 24
             radius: 7

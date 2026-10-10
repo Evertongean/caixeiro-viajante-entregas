@@ -9,7 +9,7 @@ from typing import Sequence
 
 
 class ModoCamera(str, Enum):
-    """Modos previstos pela visualização e pela futura missão."""
+    """Modos disponíveis na visualização e na missão."""
 
     LIVRE = "livre"
     AEREA = "aerea"
@@ -131,7 +131,7 @@ class CameraOrbital:
         self._limitar()
 
     def preparar_camera_atras_do_carro(self, posicao: Sequence[float]) -> None:
-        """Ativa a câmera de perseguição estática preparada para a missão."""
+        """Ativa o modo cujo posicionamento dinâmico vem da câmera seguidora."""
         self.centro = _vetor3(posicao)
         self.modo = ModoCamera.ATRAS_DO_CARRO
 

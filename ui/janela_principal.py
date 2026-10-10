@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGroupBox,
@@ -30,6 +31,14 @@ from PySide6.QtWidgets import (
 )
 
 from models.grafo import TipoVertice, criar_cenario_exemplo
+from models.missao import (
+    ControladorMissao,
+    ErroMissao,
+    EstadoMissao,
+    QuadroMissao,
+    ResumoMissao,
+    TipoEventoMissao,
+)
 from models.persistencia import ErroPersistencia
 from models.projeto_cidade import (
     ProjetoCidade,
@@ -46,6 +55,7 @@ from models.rota import (
 )
 
 from .assets_3d import ConversorBalsam
+from .animacao_missao import AnimacaoMissao
 from .dialogos_editor import DialogoRua, DialogoSuperficie, DialogoVertice
 from .editor_cidade import EditorCidade3D, ModoEditor
 from .apresentacao_rota import (
@@ -121,6 +131,10 @@ class JanelaPrincipal(QMainWindow):
         self.rota_calculada: RotaCalculada | None = None
         self._calculando_rota = False
         self._atualizando_campos_rota = False
+        self.controlador_missao: ControladorMissao | None = None
+        self.animacao_missao: AnimacaoMissao | None = None
+        self._sessao_missao_ativa = False
+        self._chave_visual_missao: tuple[object, ...] | None = None
 
         raiz = QWidget()
         raiz.setObjectName("raizAplicacao")
@@ -143,6 +157,7 @@ class JanelaPrincipal(QMainWindow):
         self.visualizacao.estado_alterado.connect(self._atualizar_estado_cena)
         self.visualizacao.camera_alterada.connect(self._camera_alterada)
         self.visualizacao.ponto_selecionado.connect(self._processar_pick)
+        self._atualizar_controles_missao()
 
     def _criar_cabecalho(self) -> QFrame:
         cabecalho = QFrame()
@@ -223,15 +238,6 @@ class JanelaPrincipal(QMainWindow):
         self.botao_aerea.clicked.connect(self.visualizacao.visao_aerea)
         self.botao_focar_carro.clicked.connect(self.visualizacao.focar_carro)
         return painel
-
-    @staticmethod
-    def _botao_futuro(texto: str, object_name: str = "") -> QPushButton:
-        botao = QPushButton(f"{texto}  ·  Em breve")
-        if object_name:
-            botao.setObjectName(object_name)
-        botao.setEnabled(False)
-        botao.setToolTip("Funcionalidade planejada para uma próxima etapa.")
-        return botao
 
     def _criar_painel_controles(self) -> QFrame:
         painel = QFrame()
@@ -444,34 +450,344 @@ class JanelaPrincipal(QMainWindow):
         grupo = QGroupBox("Missão 3D")
         layout = QVBoxLayout(grupo)
         layout.setSpacing(7)
-        self.botao_iniciar = self._botao_futuro("Iniciar missão", "botaoMissao")
-        self.botao_pausar = self._botao_futuro("Pausar")
-        self.botao_continuar = self._botao_futuro("Continuar")
-        self.botao_reiniciar = self._botao_futuro("Reiniciar")
+        self.botao_iniciar = QPushButton("Iniciar missão")
+        self.botao_iniciar.setObjectName("botaoMissao")
+        self.botao_pausar = QPushButton("Pausar")
+        self.botao_continuar = QPushButton("Continuar")
+        self.botao_reiniciar = QPushButton("Reiniciar")
+        self.botao_encerrar = QPushButton("Encerrar missão")
         for botao in (
             self.botao_iniciar,
             self.botao_pausar,
             self.botao_continuar,
             self.botao_reiniciar,
+            self.botao_encerrar,
         ):
+            botao.setEnabled(False)
             layout.addWidget(botao)
+
+        velocidade = QHBoxLayout()
+        velocidade.addWidget(QLabel("Velocidade"))
+        self.seletor_velocidade = QComboBox()
+        for texto, valor in (("0,5x", 0.5), ("1x", 1.0), ("2x", 2.0), ("4x", 4.0)):
+            self.seletor_velocidade.addItem(texto, valor)
+        self.seletor_velocidade.setCurrentIndex(1)
+        velocidade.addWidget(self.seletor_velocidade, 1)
+        layout.addLayout(velocidade)
+
         cameras = QHBoxLayout()
         self.botao_camera_livre = QPushButton("Câmera livre")
         self.botao_camera_atras = QPushButton("Atrás do carro")
+        self.botao_camera_aerea_missao = QPushButton("Aérea")
         self.botao_camera_livre.setEnabled(False)
         self.botao_camera_atras.setEnabled(False)
+        self.botao_camera_aerea_missao.setEnabled(False)
         cameras.addWidget(self.botao_camera_livre)
         cameras.addWidget(self.botao_camera_atras)
+        cameras.addWidget(self.botao_camera_aerea_missao)
         layout.addLayout(cameras)
-        nota = QLabel("As câmeras estão prontas; a animação da missão ainda não.")
-        nota.setObjectName("notaFutura")
-        nota.setWordWrap(True)
-        layout.addWidget(nota)
+        ajustes_camera = QHBoxLayout()
+        self.distancia_camera = QDoubleSpinBox()
+        self.distancia_camera.setRange(0.12, 0.80)
+        self.distancia_camera.setSingleStep(0.02)
+        self.distancia_camera.setValue(0.34)
+        self.distancia_camera.setSuffix(" dist.")
+        self.altura_camera = QDoubleSpinBox()
+        self.altura_camera.setRange(0.06, 0.50)
+        self.altura_camera.setSingleStep(0.02)
+        self.altura_camera.setValue(0.18)
+        self.altura_camera.setSuffix(" alt.")
+        ajustes_camera.addWidget(self.distancia_camera)
+        ajustes_camera.addWidget(self.altura_camera)
+        layout.addLayout(ajustes_camera)
+        self.resumo_missao = QLabel("Calcule e calibre uma rota para iniciar.")
+        self.resumo_missao.setObjectName("notaFutura")
+        self.resumo_missao.setWordWrap(True)
+        layout.addWidget(self.resumo_missao)
+        self.botao_iniciar.clicked.connect(self._iniciar_missao)
+        self.botao_pausar.clicked.connect(self._pausar_missao)
+        self.botao_continuar.clicked.connect(self._continuar_missao)
+        self.botao_reiniciar.clicked.connect(self._reiniciar_missao)
+        self.botao_encerrar.clicked.connect(self._encerrar_missao)
+        self.seletor_velocidade.currentIndexChanged.connect(
+            self._velocidade_missao_alterada
+        )
+        self.distancia_camera.valueChanged.connect(self._configurar_camera_missao)
+        self.altura_camera.valueChanged.connect(self._configurar_camera_missao)
         self.botao_camera_livre.clicked.connect(self.visualizacao.camera_livre)
         self.botao_camera_atras.clicked.connect(
             self.visualizacao.camera_atras_do_carro
         )
+        self.botao_camera_aerea_missao.clicked.connect(
+            self.visualizacao.visao_aerea
+        )
         return grupo
+
+    def _rota_apta_para_missao(self) -> tuple[bool, str]:
+        rota = self.rota_calculada
+        if rota is None:
+            return False, "Calcule uma rota antes de iniciar a missão."
+        if not rota.segmentos_espaciais:
+            return False, "A rota é trivial e não possui um trajeto para animar."
+        if not rota.calibracao_completa:
+            pendentes = ", ".join(
+                f"{origem}↔{destino}" for origem, destino in rota.arestas_pendentes
+            )
+            return False, f"Confirme manualmente os trechos pendentes: {pendentes}."
+        if not self.visualizacao.modelos_preparados:
+            return False, "Aguarde o carregamento do carro e da cidade 3D."
+        return True, "Rota calibrada e pronta para iniciar."
+
+    def _atualizar_controles_missao(self) -> None:
+        estado = (
+            self.controlador_missao.estado
+            if self.controlador_missao is not None
+            else None
+        )
+        apta, motivo = self._rota_apta_para_missao()
+        self.botao_iniciar.setEnabled(apta and not self._sessao_missao_ativa)
+        self.botao_iniciar.setToolTip(motivo)
+        self.botao_pausar.setEnabled(
+            estado in (EstadoMissao.EM_MOVIMENTO, EstadoMissao.EM_ENTREGA)
+        )
+        self.botao_continuar.setEnabled(estado is EstadoMissao.PAUSADA)
+        self.botao_reiniciar.setEnabled(
+            self._sessao_missao_ativa
+            and estado
+            in (
+                EstadoMissao.EM_MOVIMENTO,
+                EstadoMissao.EM_ENTREGA,
+                EstadoMissao.PAUSADA,
+                EstadoMissao.CONCLUIDA,
+            )
+        )
+        self.botao_encerrar.setEnabled(self._sessao_missao_ativa)
+        self.seletor_velocidade.setEnabled(
+            not self._sessao_missao_ativa
+            or estado is not EstadoMissao.CONCLUIDA
+        )
+
+    def _definir_bloqueio_missao(self, bloqueado: bool) -> None:
+        self._sessao_missao_ativa = bloqueado
+        controles_rota = (
+            self.seletor_algoritmo,
+            self.origem,
+            self.destino,
+            self.lista_clientes,
+            self.selecionar_todos_clientes,
+            self.botao_calcular,
+            self.botao_limpar_rota,
+        )
+        for controle in controles_rota:
+            controle.setEnabled(not bloqueado)
+        self.botao_abrir_projeto.setEnabled(not bloqueado)
+        if bloqueado:
+            self._modo_navegar()
+            for botao in self.botoes_edicao:
+                botao.setEnabled(False)
+            for botao in (
+                self.botao_confirmar_edicao,
+                self.botao_desfazer_edicao,
+                self.botao_cancelar_edicao,
+                self.botao_editar_selecao,
+                self.botao_reposicionar,
+                self.botao_excluir_selecao,
+            ):
+                botao.setEnabled(False)
+            self.visualizacao.definir_modo_interacao(ModoEditor.NAVEGAR.value)
+        else:
+            if self.visualizacao.modelos_preparados:
+                for botao in self.botoes_edicao:
+                    botao.setEnabled(True)
+            self._atualizar_botoes_operacao()
+            self._atualizar_botoes_selecao()
+            self._atualizar_disponibilidade_calculo()
+            self.botao_limpar_rota.setEnabled(self.rota_calculada is not None)
+        self._atualizar_controles_missao()
+
+    def _iniciar_missao(self) -> None:
+        if self._sessao_missao_ativa:
+            return
+        apta, motivo = self._rota_apta_para_missao()
+        if not apta or self.rota_calculada is None:
+            self._mostrar_erro(motivo)
+            return
+        try:
+            controlador = ControladorMissao(self.rota_calculada)
+            controlador.multiplicador_velocidade = float(
+                self.seletor_velocidade.currentData()
+            )
+        except (ErroMissao, TypeError, ValueError) as erro:
+            self._mostrar_erro(str(erro))
+            return
+        self.controlador_missao = controlador
+        self.animacao_missao = AnimacaoMissao(controlador, self)
+        self.animacao_missao.quadro_atualizado.connect(
+            self._atualizar_quadro_missao
+        )
+        self.animacao_missao.concluida.connect(self._missao_concluida)
+        self._chave_visual_missao = None
+        self.resumo_missao.setText("Missão em andamento.")
+        self._definir_bloqueio_missao(True)
+        self._configurar_camera_missao()
+        self.visualizacao.camera_atras_do_carro()
+        self.animacao_missao.iniciar()
+        self._atualizar_controles_missao()
+
+    def _pausar_missao(self) -> None:
+        if self.animacao_missao is None:
+            return
+        try:
+            self.animacao_missao.pausar()
+        except ErroMissao:
+            return
+        self._atualizar_controles_missao()
+
+    def _continuar_missao(self) -> None:
+        if self.animacao_missao is None:
+            return
+        try:
+            self.animacao_missao.continuar()
+        except ErroMissao:
+            return
+        self._atualizar_controles_missao()
+
+    def _reiniciar_missao(self) -> None:
+        if self.animacao_missao is None:
+            return
+        try:
+            self._chave_visual_missao = None
+            self.resumo_missao.setText("Missão reiniciada.")
+            self.animacao_missao.reiniciar()
+        except ErroMissao:
+            return
+        self.visualizacao.camera_atras_do_carro()
+        self._atualizar_controles_missao()
+
+    def _encerrar_missao(self) -> None:
+        if not self._sessao_missao_ativa:
+            return
+        resumo = (
+            self.controlador_missao.resumo()
+            if self.controlador_missao is not None
+            else None
+        )
+        if self.animacao_missao is not None:
+            self.animacao_missao.encerrar()
+            self.animacao_missao.deleteLater()
+        self.animacao_missao = None
+        self.controlador_missao = None
+        self._chave_visual_missao = None
+        self._definir_bloqueio_missao(False)
+        if self.rota_calculada is not None:
+            self._apresentar_rota(self.rota_calculada)
+        if resumo is not None:
+            self.resumo_missao.setText(self._texto_resumo_missao(resumo))
+        self.cartao_status.definir("Missão encerrada; edição liberada.")
+
+    def _velocidade_missao_alterada(self, _indice: int = -1) -> None:
+        if self.controlador_missao is not None:
+            self.controlador_missao.multiplicador_velocidade = float(
+                self.seletor_velocidade.currentData()
+            )
+
+    def _configurar_camera_missao(self, *_args) -> None:
+        self.visualizacao.configurar_camera_seguidora(
+            self.distancia_camera.value(), self.altura_camera.value()
+        )
+
+    def _atualizar_quadro_missao(
+        self, quadro: QuadroMissao, delta_segundos: float
+    ) -> None:
+        self.visualizacao.atualizar_carro(
+            quadro.posicao,
+            quadro.orientacao_graus,
+            delta_segundos,
+            imediato=delta_segundos == 0.0,
+        )
+        rota = self.rota_calculada
+        if rota is None:
+            return
+        concluida = quadro.estado is EstadoMissao.CONCLUIDA
+        chave = (
+            quadro.indice_aresta,
+            quadro.clientes_atendidos,
+            quadro.proximo_cliente,
+            concluida,
+        )
+        if chave != self._chave_visual_missao:
+            self.visualizacao.atualizar_destaque_rota(
+                segmentos_rota_qml(
+                    rota, quadro.indice_aresta, concluida=concluida
+                ),
+                marcadores_rota_qml(
+                    rota,
+                    self.projeto,
+                    set(quadro.clientes_atendidos),
+                    quadro.proximo_cliente,
+                ),
+            )
+            self._chave_visual_missao = chave
+        self.cartao_distancia.definir(
+            f"{quadro.distancia_percorrida:.2f} / {rota.distancia_total:g} km · "
+            f"restam {quadro.distancia_restante:.2f}"
+        )
+        self.cartao_percurso.definir(
+            f"{' → '.join(rota.percurso_completo)} · atual: "
+            f"{quadro.origem_aresta} → {quadro.destino_aresta} "
+            f"({quadro.indice_aresta + 1}/{len(rota.segmentos_espaciais)})"
+        )
+        self.cartao_clientes.definir(
+            f"{len(quadro.clientes_atendidos)} / {quadro.total_clientes} "
+            "clientes atendidos"
+        )
+        if quadro.estado is EstadoMissao.PAUSADA:
+            status = "Missão pausada."
+        elif quadro.estado is EstadoMissao.EM_ENTREGA:
+            cliente = quadro.clientes_atendidos[-1]
+            status = f"Entregando ao cliente {cliente}…"
+        elif quadro.estado is EstadoMissao.CONCLUIDA:
+            status = "Missão concluída; encerre para liberar a edição."
+        elif quadro.estado is EstadoMissao.ENCERRADA:
+            status = "Missão encerrada."
+        else:
+            if (
+                rota.algoritmo is AlgoritmoRota.TSP
+                and quadro.total_clientes > 0
+                and len(quadro.clientes_atendidos) == quadro.total_clientes
+            ):
+                status = "Retornando ao depósito."
+            elif quadro.proximo_cliente is not None:
+                status = f"Seguindo para o cliente {quadro.proximo_cliente}."
+            else:
+                status = "Em deslocamento."
+        for evento in quadro.eventos:
+            if evento.tipo is TipoEventoMissao.ENTREGA:
+                status = f"Entrega em {evento.vertice} confirmada."
+        self.cartao_status.definir(status)
+        self._atualizar_controles_missao()
+
+    def _missao_concluida(self, resumo: ResumoMissao) -> None:
+        self.resumo_missao.setText(self._texto_resumo_missao(resumo))
+        self._atualizar_controles_missao()
+
+    @staticmethod
+    def _texto_resumo_missao(resumo: ResumoMissao) -> str:
+        algoritmo = "Dijkstra" if resumo.algoritmo is AlgoritmoRota.DIJKSTRA else "TSP"
+        if resumo.algoritmo is AlgoritmoRota.TSP:
+            alvo = "clientes: " + (", ".join(resumo.clientes_selecionados) or "nenhum")
+            ordem = " · ordem: " + " → ".join(resumo.ordem_atendimento)
+        else:
+            alvo = f"destino: {resumo.destino}"
+            ordem = ""
+        estado = "concluída" if resumo.concluida else "interrompida"
+        return (
+            f"Missão {estado} · algoritmo: {algoritmo} · origem: {resumo.origem} · "
+            f"{alvo} · distância: {resumo.distancia_percorrida:.2f}/"
+            f"{resumo.distancia_total:g} km · entregas: {resumo.clientes_atendidos}/"
+            f"{resumo.total_clientes}{ordem} · tempo da simulação: "
+            f"{resumo.tempo_decorrido:.1f} s."
+        )
 
     def _algoritmo_rota_alterado(self, indice: int) -> None:
         self.campos_algoritmo.setCurrentIndex(indice)
@@ -530,7 +846,7 @@ class JanelaPrincipal(QMainWindow):
         self._atualizando_campos_rota = False
 
     def _calcular_rota(self) -> None:
-        if self._calculando_rota:
+        if self._calculando_rota or self._sessao_missao_ativa:
             return
         self._calculando_rota = True
         self.botao_calcular.setEnabled(False)
@@ -564,6 +880,7 @@ class JanelaPrincipal(QMainWindow):
             self.cartao_status.definir(status)
             self.botao_limpar_rota.setEnabled(False)
             self.botao_enquadrar_rota.setEnabled(False)
+            self._atualizar_controles_missao()
         else:
             self._apresentar_rota(rota)
         finally:
@@ -587,7 +904,7 @@ class JanelaPrincipal(QMainWindow):
             self.resultado_calibracao.setText(
                 "Todos os trechos possuem traçado espacial confirmado manualmente."
             )
-            self.cartao_status.definir("Rota pronta para futura missão.")
+            self.cartao_status.definir("Rota pronta para missão 3D.")
         else:
             pendentes = ", ".join(
                 f"{origem}↔{destino}"
@@ -607,8 +924,14 @@ class JanelaPrincipal(QMainWindow):
         self.botao_enquadrar_rota.setEnabled(
             bool(pontos_para_enquadrar(rota, self.projeto))
         )
+        apta, motivo = self._rota_apta_para_missao()
+        self.resumo_missao.setText(motivo)
+        self.botao_iniciar.setEnabled(apta and not self._sessao_missao_ativa)
+        self._atualizar_controles_missao()
 
     def limpar_rota(self, *, status: str = "Aguardando cálculo.") -> None:
+        if self._sessao_missao_ativa:
+            return
         self.rota_calculada = None
         self.visualizacao.limpar_destaque_rota()
         self.cartao_distancia.definir("—")
@@ -620,6 +943,8 @@ class JanelaPrincipal(QMainWindow):
         self.resultado_calibracao.setText(status)
         self.botao_limpar_rota.setEnabled(False)
         self.botao_enquadrar_rota.setEnabled(False)
+        self.resumo_missao.setText("Calcule e calibre uma rota para iniciar.")
+        self._atualizar_controles_missao()
 
     def _invalidar_rota_por_edicao(self) -> None:
         if self.rota_calculada is not None:
@@ -642,7 +967,9 @@ class JanelaPrincipal(QMainWindow):
             disponivel = self.origem.count() > 0 and self.destino.count() > 0
         else:
             disponivel = self.grafo.obter_deposito() is not None
-        self.botao_calcular.setEnabled(disponivel and not self._calculando_rota)
+        self.botao_calcular.setEnabled(
+            disponivel and not self._calculando_rota and not self._sessao_missao_ativa
+        )
 
     def _definir_instrucao(self, texto: str) -> None:
         self.instrucao_editor.setText(texto)
@@ -694,6 +1021,14 @@ class JanelaPrincipal(QMainWindow):
         self._modo_navegar()
 
     def _atualizar_botoes_operacao(self) -> None:
+        if self._sessao_missao_ativa:
+            for botao in (
+                self.botao_confirmar_edicao,
+                self.botao_desfazer_edicao,
+                self.botao_cancelar_edicao,
+            ):
+                botao.setEnabled(False)
+            return
         operacao = self.editor.operacao_rua
         criando_rua = self.editor.modo is ModoEditor.CRIAR_RUA
         self.botao_confirmar_edicao.setEnabled(
@@ -778,6 +1113,11 @@ class JanelaPrincipal(QMainWindow):
         material: str,
         encontrado: bool,
     ) -> None:
+        if self._sessao_missao_ativa:
+            self._definir_instrucao(
+                "Encerre a missão antes de editar ou selecionar itens da cidade."
+            )
+            return
         if not encontrado:
             self._definir_instrucao(
                 "Nenhuma geometria foi atingida. Tente novamente sobre a cidade."
@@ -1020,6 +1360,11 @@ class JanelaPrincipal(QMainWindow):
             self._atualizar_botoes_operacao()
 
     def _atualizar_botoes_selecao(self) -> None:
+        if self._sessao_missao_ativa:
+            self.botao_editar_selecao.setEnabled(False)
+            self.botao_excluir_selecao.setEnabled(False)
+            self.botao_reposicionar.setEnabled(False)
+            return
         selecao = self.editor.selecao
         self.botao_editar_selecao.setEnabled(selecao is not None)
         self.botao_excluir_selecao.setEnabled(selecao is not None)
@@ -1120,6 +1465,11 @@ class JanelaPrincipal(QMainWindow):
         return True
 
     def abrir_projeto(self, caminho: str | Path | None = None) -> bool:
+        if self._sessao_missao_ativa:
+            self._mostrar_erro(
+                "Encerre explicitamente a missão antes de abrir outro projeto."
+            )
+            return False
         if caminho is None:
             selecionado, _ = QFileDialog.getOpenFileName(
                 self,
@@ -1217,10 +1567,12 @@ class JanelaPrincipal(QMainWindow):
                 self.botao_focar_carro,
                 self.botao_camera_livre,
                 self.botao_camera_atras,
+                self.botao_camera_aerea_missao,
             ):
                 botao.setEnabled(True)
-            for botao in self.botoes_edicao:
-                botao.setEnabled(True)
+            if not self._sessao_missao_ativa:
+                for botao in self.botoes_edicao:
+                    botao.setEnabled(True)
             if not self._editor_inicializado:
                 self._editor_inicializado = True
                 self._inicializar_posicoes_legadas()
@@ -1228,6 +1580,7 @@ class JanelaPrincipal(QMainWindow):
                 self._modo_navegar()
                 if self.rota_calculada is None:
                     self.limpar_rota()
+            self._atualizar_controles_missao()
 
     def _camera_alterada(self, modo: str) -> None:
         nomes = {
@@ -1246,6 +1599,10 @@ class JanelaPrincipal(QMainWindow):
             self.divisor.setSizes([int(largura * 0.75), int(largura * 0.25)])
 
     def closeEvent(self, evento: QCloseEvent) -> None:  # noqa: N802 - API Qt
+        if self.animacao_missao is not None:
+            self.animacao_missao.timer.stop()
+            if self.controlador_missao is not None:
+                self.controlador_missao.encerrar()
         evento.accept()
 
 

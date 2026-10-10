@@ -7,8 +7,9 @@ Viajante (TSP) e visualizar o cenário em uma aplicação desktop 3D.
 A interface apresenta os modelos fornecidos em `assets/models/cidade.glb` e
 `assets/models/carro.glb`, navegação de câmera e um editor que cadastra pontos
 e ruas diretamente sobre a geometria 3D. Dijkstra e TSP podem ser executados
-no grafo editado e seus percursos espaciais são destacados na cidade. A missão
-animada permanece reservada para a próxima etapa.
+no grafo editado e seus percursos espaciais são destacados na cidade. Uma
+missão animada move o carro real pelas polilinhas calibradas, registra entregas
+e oferece câmera de perseguição.
 
 ## Requisitos
 
@@ -48,13 +49,16 @@ python3 main.py
 │   └── caixeiro_viajante.py
 ├── models/
 │   ├── grafo.py
+│   ├── missao.py             # movimento, estados, progresso e entregas
 │   ├── persistencia.py
 │   ├── projeto_cidade.py     # grafo e metadados espaciais versionados
 │   └── rota.py               # resultado matemático e validação espacial
 ├── ui/
+│   ├── animacao_missao.py    # relógio Qt não bloqueante
 │   ├── apresentacao_rota.py  # segmentos e marcadores declarativos da rota
 │   ├── assets_3d.py          # valida GLB e gerencia o cache Balsam
 │   ├── camera_orbital.py     # estado matemático da câmera
+│   ├── camera_seguidora.py   # câmera em terceira pessoa suavizada
 │   ├── cena_3d.qml           # cena Qt Quick 3D única
 │   ├── dialogos_editor.py    # confirmação de pontos, superfícies e pesos
 │   ├── editor_cidade.py      # operações espaciais sobre o grafo oficial
@@ -77,9 +81,8 @@ A janela possui três regiões:
 - painel de controles rolável à direita;
 - quatro cartões inferiores para distância, percurso, clientes e status.
 
-Os controles da câmera, do enquadramento, da seção **Editar cidade** e do
-cálculo de rotas são funcionais. Somente a missão animada permanece
-explicitamente desabilitada como “Em breve”.
+Os controles da câmera, do enquadramento, da seção **Editar cidade**, do
+cálculo de rotas e da missão animada são funcionais.
 
 ### Editor visual
 
@@ -134,6 +137,32 @@ ajusta a câmera aos pontos espaciais disponíveis sem alterar modelo, grafo ou
 pesos. Qualquer edição de vértice/rua ou carregamento de outro projeto invalida
 o resultado anterior e exige novo cálculo.
 
+### Missão 3D
+
+**Iniciar missão** fica disponível somente quando há uma rota não trivial e
+todos os trechos usados possuem polilinhas confirmadas manualmente. O botão não
+recalcula Dijkstra ou TSP: ele consome o resultado exibido. Ruas pendentes são
+listadas e precisam ser corrigidas no editor antes da animação.
+
+O controlador independente de Qt avança com o delta de tempo e interpola cada
+par de pontos da polilinha. Ele preserva cruzamentos, curvas, sentidos inversos
+e repetições de arestas. A distância mostrada em quilômetros continua sendo o
+peso oficial do grafo, distribuído proporcionalmente ao avanço geométrico em
+cada aresta. O `QTimer` apenas fornece quadros sem bloquear a interface.
+
+Durante a execução é possível pausar, continuar, reiniciar, encerrar e escolher
+0,5×, 1×, 2× ou 4×. A edição e a abertura de outro projeto ficam bloqueadas até
+**Encerrar missão**, inclusive depois de uma conclusão natural. Reiniciar leva
+o carro à origem e limpa as entregas. O painel apresenta o trecho atual,
+distâncias percorrida/restante, clientes atendidos e, ao final, um resumo com
+algoritmo, alvos, ordem TSP e tempo da simulação.
+
+No TSP, uma entrega só ocorre ao alcançar o próximo cliente da ordem oficial;
+passagens incidentais não contam. O carro aguarda aproximadamente um segundo e
+retorna ao depósito ao final. Dijkstra registra somente a chegada ao destino.
+Trechos percorridos ficam cinza, o atual amarelo e os restantes preservam o
+destaque ciano.
+
 ### Câmera
 
 - botão esquerdo + arrastar: órbita;
@@ -143,8 +172,14 @@ o resultado anterior e exige novo cálculo.
 - **Visão aérea**: muda somente a câmera;
 - **Focar carro**: enquadra o veículo;
 - **Enquadrar rota**: centraliza o percurso espacial calculado;
-- **Câmera livre** e **Atrás do carro**: alternam a estrutura preparada para a
-  futura missão.
+- **Câmera livre**, **Atrás do carro** e **Aérea**: podem ser alternadas sem
+  interromper a missão;
+- distância e altura da câmera de perseguição são ajustáveis no painel.
+
+O eixo frontal foi conferido no `carro.glb`: a grade e o para-choque dianteiros
+estão no extremo local `-Z`. A transformação do asset aplica a correção de
+180° ao yaw da rota, enquanto a câmera é calculada separadamente pela direção
+de movimento e suavizada nas curvas.
 
 Nenhuma operação de câmera modifica a geometria dos modelos.
 
@@ -206,11 +241,16 @@ superfícies, criação/edição/exclusão de vértices e ruas, coordenadas, cur
 pesos, consistência visual, ponte de picking, seleção e execução de
 Dijkstra/TSP, ordem de atendimento, percurso completo, trechos pendentes,
 invalidação, cartões, destaques espaciais, inspeção dos GLBs, câmera e
-inicialização QML.
+inicialização QML, interpolação temporal, orientação, arestas inversas e
+repetidas, pausa/continuação/reinício, velocidades, progresso oficial,
+entregas TSP e câmera de perseguição.
 
 O backend `offscreen` valida a estrutura sem oferecer uma API 3D real. A
 validação desta versão também foi executada com OpenGL: cidade e carro foram
-materializados, e dez objetos luminosos correspondentes às curvas do percurso
-TSP de demonstração foram efetivamente instanciados e capturados na cena. Como
-a distinção semântica do asset não é confiável, a classificação de superfícies
-e a confirmação dos traçados continuam sendo verificações manuais obrigatórias.
+materializados; pontos de uma faixa contínua de pavimento foram obtidos por
+`View3D.pick()`; o `carro.glb` avançou sobre ela de `x=-1,379621` até
+`x=-0,667879`, permaneceu imóvel durante a pausa e terminou no ponto exato. A
+câmera de perseguição e o resumo final também foram capturados na cena real.
+Como a distinção semântica do asset não é confiável, a classificação de
+superfícies e a confirmação dos traçados continuam sendo verificações manuais
+obrigatórias.

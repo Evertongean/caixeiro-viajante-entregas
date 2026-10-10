@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -76,13 +77,89 @@ class TestNovaInterface(unittest.TestCase):
         self.assertGreater(janela.visualizacao.width(), 500)
         self.assertGreater(janela.visualizacao.height(), 350)
 
-    def test_editor_aguarda_3d_rota_esta_ativa_e_missao_e_futura(self) -> None:
+    def test_editor_aguarda_3d_e_missao_aguarda_rota_calibrada(self) -> None:
         janela = self.criar_janela()
         self.assertTrue(all(not botao.isEnabled() for botao in janela.botoes_edicao))
         self.assertTrue(janela.botao_calcular.isEnabled())
         self.assertFalse(janela.botao_iniciar.isEnabled())
         self.assertFalse(janela.botao_pausar.isEnabled())
-        self.assertIn("Em breve", janela.botao_iniciar.text())
+        self.assertEqual(janela.botao_iniciar.text(), "Iniciar missão")
+        self.assertIn("Calcule uma rota", janela.botao_iniciar.toolTip())
+        with patch("ui.janela_principal.QMessageBox.warning") as aviso:
+            janela._iniciar_missao()
+        self.assertIsNone(janela.controlador_missao)
+        aviso.assert_called_once()
+
+    def test_missao_lista_ruas_nao_calibradas_e_permanece_bloqueada(self) -> None:
+        janela = self.criar_janela()
+        janela.visualizacao.modelos_preparados = True
+        janela.origem.setCurrentIndex(janela.origem.findData("D"))
+        janela.destino.setCurrentIndex(janela.destino.findData("B"))
+        janela.botao_calcular.click()
+        self.assertFalse(janela.botao_iniciar.isEnabled())
+        self.assertIn("D↔X", janela.botao_iniciar.toolTip())
+        self.assertIn("X↔A", janela.botao_iniciar.toolTip())
+        self.assertIn("A↔B", janela.botao_iniciar.toolTip())
+
+    def test_missao_inicia_bloqueia_edicao_pausa_e_encerra(self) -> None:
+        janela = self.criar_janela()
+        janela.visualizacao.modelos_preparados = True
+        janela.visualizacao.info_cidade = SimpleNamespace(
+            limites=SimpleNamespace(minimo=(0, 0, 0), maximo=(1, 1, 1))
+        )
+        for botao in (
+            janela.botao_camera_aerea_missao,
+            janela.botao_camera_livre,
+            janela.botao_camera_atras,
+        ):
+            botao.setEnabled(True)
+        janela.projeto.posicoes = {
+            "D": (0.0, 0.0, 0.0),
+            "X": (1.0, 0.0, 0.0),
+            "A": (2.0, 0.0, 0.0),
+            "B": (3.0, 0.0, 0.0),
+            "C": (1.0, 0.0, 2.0),
+        }
+        for origem, destino in (("D", "X"), ("X", "A"), ("A", "B")):
+            janela.projeto.ruas[janela.projeto.chave_aresta(origem, destino)] = (
+                GeometriaRua(origem, destino, [], True)
+            )
+        janela.origem.setCurrentIndex(janela.origem.findData("D"))
+        janela.destino.setCurrentIndex(janela.destino.findData("B"))
+        janela.botao_calcular.click()
+        self.assertTrue(janela.botao_iniciar.isEnabled())
+        janela.botao_iniciar.click()
+        self.assertTrue(janela._sessao_missao_ativa)
+        self.assertFalse(janela.botao_abrir_projeto.isEnabled())
+        self.assertTrue(all(not botao.isEnabled() for botao in janela.botoes_edicao))
+        janela.botao_pausar.click()
+        self.assertTrue(janela.botao_continuar.isEnabled())
+        posicao = janela.controlador_missao.quadro().posicao
+        janela.botao_camera_aerea_missao.click()
+        self.assertEqual(janela.visualizacao.camera.modo, ModoCamera.AEREA)
+        janela.botao_camera_livre.click()
+        self.assertEqual(janela.visualizacao.camera.modo, ModoCamera.LIVRE)
+        janela.botao_camera_atras.click()
+        self.assertEqual(janela.visualizacao.camera.modo, ModoCamera.ATRAS_DO_CARRO)
+        self.assertEqual(janela.controlador_missao.quadro().posicao, posicao)
+        with patch("ui.janela_principal.QMessageBox.warning"):
+            self.assertFalse(janela.abrir_projeto("outro.json"))
+        janela.botao_continuar.click()
+        janela.seletor_velocidade.setCurrentIndex(3)
+        self.assertEqual(janela.controlador_missao.multiplicador_velocidade, 4.0)
+        janela.botao_encerrar.click()
+        self.assertFalse(janela._sessao_missao_ativa)
+        self.assertTrue(janela.botao_abrir_projeto.isEnabled())
+        self.assertIsNone(janela.animacao_missao)
+        self.assertIsNone(janela.controlador_missao)
+
+    def test_qml_camera_de_perseguicao_nao_usa_deslocamento_fixo(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("cameraSeguimentoPosicao", qml)
+        self.assertIn("cameraSeguimentoAlvo", qml)
+        self.assertNotIn("raiz.posicaoCarro.z + 0.42", qml)
 
     def test_seletor_prepara_campos_correspondentes_ao_algoritmo(self) -> None:
         janela = self.criar_janela()
