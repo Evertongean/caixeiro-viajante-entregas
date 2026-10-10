@@ -105,6 +105,19 @@ class TestRotaIntegrada(unittest.TestCase):
         self.assertTrue(all(segmento["cor"] == "#F59E0B" for segmento in segmentos))
         self.assertTrue(all(not segmento["confirmado"] for segmento in segmentos))
 
+    def test_fita_da_rota_fica_proxima_ao_pavimento(self) -> None:
+        self.configurar_rua("D", "X", (0.5, 0.0, 0.1))
+        rota = calcular_dijkstra(self.projeto, "D", "X")
+        segmentos = segmentos_rota_qml(rota)
+
+        self.assertTrue(segmentos)
+        self.assertTrue(
+            all(segmento["ay"] == 0.004 for segmento in segmentos)
+        )
+        self.assertTrue(
+            all(segmento["by"] == 0.004 for segmento in segmentos)
+        )
+
     def test_tsp_preserva_repeticao_real_da_mesma_rua(self) -> None:
         grafo = Grafo()
         grafo.adicionar_vertice(Vertice("D", "Base", TipoVertice.DEPOSITO, 0, 0))

@@ -38,10 +38,12 @@ def segmentos_rota_qml(
                     "estado": estado,
                     "cor": cor,
                     "ax": inicio[0],
-                    "ay": inicio[1] + 0.034,
+                    # Fita plana pouco acima do pavimento: abaixo do chassi e
+                    # alta o bastante para nao disputar o depth buffer.
+                    "ay": inicio[1] + 0.004,
                     "az": inicio[2],
                     "bx": fim[0],
-                    "by": fim[1] + 0.034,
+                    "by": fim[1] + 0.004,
                     "bz": fim[2],
                 }
             )

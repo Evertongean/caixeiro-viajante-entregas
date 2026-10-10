@@ -41,6 +41,11 @@ Item {
     property var segmentosPrevia: []
     property var segmentosRota: []
     property var marcadoresRota: []
+    // O cubo primitivo mede 100 unidades. Estes valores sao dimensoes reais
+    // na cena, e nao escalas magicas dependentes da camera.
+    property real larguraRotaMundo: 0.006
+    property real espessuraRotaMundo: 0.0012
+    property real distanciaRotulosCruzamentos: 2.4
     property string origemUltimoPick: "nenhuma"
     property bool marcadorTemporarioVisivel: false
     property vector3d marcadorTemporarioPosicao: Qt.vector3d(0, 0, 0)
@@ -129,6 +134,37 @@ Item {
                 return true
         }
         return false
+    }
+
+    // mapFrom3DScene depende internamente da matriz da camera, mas essa
+    // dependencia nao e descoberta automaticamente pelo mecanismo de
+    // bindings do QML. Os argumentos explicitos invalidam a projecao para
+    // toda alteracao que muda a matriz ou o viewport.
+    function projetarPonto(ponto, yaw, pitch, distancia, centro,
+                           posicaoSeguimento, alvoSeguimento,
+                           larguraViewport, alturaViewport, modo) {
+        // Os parametros existem para estabelecer dependencias reativas
+        // individuais, inclusive quando dois movimentos numericos se anulam.
+        return visualizacao.mapFrom3DScene(ponto)
+    }
+
+    function projecaoVisivel(ponto, largura, altura) {
+        return ponto.z > 0
+            && ponto.x >= largura / 2
+            && ponto.x <= visualizacao.width - largura / 2
+            && ponto.y >= altura
+            && ponto.y <= visualizacao.height
+    }
+
+    function rotuloMarcadorVisivel(item) {
+        return item.tipo !== "cruzamento"
+            || cameraDistancia <= distanciaRotulosCruzamentos
+    }
+
+    function rotuloRotaVisivel(item) {
+        return cameraModo !== "atras_do_carro"
+            || item.texto.startsWith("PRÓXIMA")
+            || item.texto.includes("FIM")
     }
 
     Rectangle {
@@ -238,7 +274,10 @@ Item {
                 required property var modelData
                 objectName: "aresta:" + modelData.aresta
                 source: "#Cube"
-                pickable: raiz.modoInteracao === "navegar"
+                // A malha viaria auxilia o editor. Com uma rota calculada,
+                // somente a fita do percurso deve disputar a leitura da rua.
+                visible: raiz.segmentosRota.length === 0
+                pickable: visible && raiz.modoInteracao === "navegar"
                 position: raiz.centroSegmento(modelData)
                 eulerRotation: raiz.rotacaoSegmento(modelData)
                 scale: Qt.vector3d(
@@ -288,20 +327,20 @@ Item {
                 position: raiz.centroSegmento(modelData)
                 eulerRotation: raiz.rotacaoSegmento(modelData)
                 scale: Qt.vector3d(
-                    0.00018,
-                    0.00018,
+                    raiz.larguraRotaMundo / 100,
+                    raiz.espessuraRotaMundo / 100,
                     raiz.comprimentoSegmento(modelData) / 100
                 )
                 materials: PrincipledMaterial {
                     baseColor: segmentoRota.modelData.cor
                     emissiveFactor: segmentoRota.modelData.estado === "atual"
-                        ? Qt.vector3d(0.95, 0.48, 0.04)
+                        ? Qt.vector3d(0.42, 0.22, 0.03)
                         : segmentoRota.modelData.estado === "percorrido"
-                            ? Qt.vector3d(0.14, 0.25, 0.32)
+                            ? Qt.vector3d(0.06, 0.10, 0.14)
                             : segmentoRota.modelData.confirmado
-                                ? Qt.vector3d(0.18, 0.72, 0.95)
-                                : Qt.vector3d(0.78, 0.30, 0.03)
-                    roughness: 0.18
+                                ? Qt.vector3d(0.08, 0.34, 0.46)
+                                : Qt.vector3d(0.38, 0.15, 0.02)
+                    roughness: 0.30
                 }
             }
         }
@@ -318,8 +357,8 @@ Item {
                     modelData.x, modelData.y + 0.045, modelData.z
                 )
                 scale: raiz.cameraModo === "atras_do_carro"
-                    ? Qt.vector3d(0.00012, 0.00012, 0.00012)
-                    : Qt.vector3d(0.00042, 0.00042, 0.00042)
+                    ? Qt.vector3d(0.00007, 0.00007, 0.00007)
+                    : Qt.vector3d(0.00032, 0.00032, 0.00032)
                 materials: PrincipledMaterial {
                     baseColor: marcador3D.modelData.cor
                     emissiveFactor: Qt.vector3d(0.16, 0.16, 0.16)
@@ -340,8 +379,8 @@ Item {
                     modelData.x, modelData.y + 0.048, modelData.z
                 )
                 scale: raiz.cameraModo === "atras_do_carro"
-                    ? Qt.vector3d(0.00018, 0.00018, 0.00018)
-                    : Qt.vector3d(0.00062, 0.00062, 0.00062)
+                    ? Qt.vector3d(0.00008, 0.00008, 0.00008)
+                    : Qt.vector3d(0.00036, 0.00036, 0.00036)
                 materials: PrincipledMaterial {
                     baseColor: marcadorRota3D.modelData.cor
                     emissiveFactor: Qt.vector3d(0.35, 0.55, 0.60)
@@ -374,19 +413,25 @@ Item {
         delegate: Rectangle {
             id: etiquetaMarcador
             required property var modelData
-            property vector3d projetado: visualizacao.mapFrom3DScene(
-                Qt.vector3d(modelData.x, modelData.y + 0.095, modelData.z)
+            objectName: "etiqueta-marcador:" + modelData.id
+            property vector3d projetado: raiz.projetarPonto(
+                Qt.vector3d(modelData.x, modelData.y + 0.078, modelData.z),
+                raiz.cameraYaw, raiz.cameraPitch, raiz.cameraDistancia,
+                raiz.centroCamera, raiz.cameraSeguimentoPosicao,
+                raiz.cameraSeguimentoAlvo, visualizacao.width,
+                visualizacao.height, raiz.cameraModo
             )
-            x: projetado.x - width / 2 + raiz.cameraYaw * 0
-            y: projetado.y - height + raiz.cameraPitch * 0
+            x: projetado.x - width / 2
+            y: projetado.y - height
             z: 20
-            visible: projetado.z > 0
+            visible: raiz.projecaoVisivel(projetado, width, height)
                      && raiz.cameraModo !== "atras_do_carro"
                      && !raiz.marcadorEstaNaRota(modelData.id)
+                     && raiz.rotuloMarcadorVisivel(modelData)
             width: textoMarcador.implicitWidth + 16
-            height: 24
-            radius: 7
-            color: "#E6111C2D"
+            height: 22
+            radius: 6
+            color: "#DC0B1728"
             border.color: modelData.cor
             border.width: 1
 
@@ -394,10 +439,12 @@ Item {
                 id: textoMarcador
                 anchors.centerIn: parent
                 color: "#F4F8FF"
-                font.pixelSize: 10
+                font.pixelSize: 9
                 font.weight: Font.DemiBold
-                text: etiquetaMarcador.modelData.id + " · "
-                      + etiquetaMarcador.modelData.nome
+                text: etiquetaMarcador.modelData.tipo === "cruzamento"
+                    ? etiquetaMarcador.modelData.id
+                    : etiquetaMarcador.modelData.id + " · "
+                        + etiquetaMarcador.modelData.nome
             }
         }
     }
@@ -407,19 +454,29 @@ Item {
         delegate: Rectangle {
             id: etiquetaRota
             required property var modelData
-            property vector3d projetado: visualizacao.mapFrom3DScene(
-                Qt.vector3d(modelData.x, modelData.y + 0.145, modelData.z)
+            objectName: "etiqueta-rota:" + modelData.id
+            property real alturaAncora: raiz.cameraModo === "atras_do_carro"
+                ? 0.072 : 0.088
+            property vector3d projetado: raiz.projetarPonto(
+                Qt.vector3d(
+                    modelData.x, modelData.y + alturaAncora, modelData.z
+                ),
+                raiz.cameraYaw, raiz.cameraPitch, raiz.cameraDistancia,
+                raiz.centroCamera, raiz.cameraSeguimentoPosicao,
+                raiz.cameraSeguimentoAlvo, visualizacao.width,
+                visualizacao.height, raiz.cameraModo
             )
-            x: projetado.x - width / 2 + raiz.cameraYaw * 0
-            y: projetado.y - height + raiz.cameraPitch * 0
+            x: projetado.x - width / 2
+            y: projetado.y - height
             z: 24
-            visible: projetado.z > 0
-            width: textoRota.implicitWidth + 18
-            height: 23
-            radius: 8
-            color: "#EE07111F"
+            visible: raiz.projecaoVisivel(projetado, width, height)
+                     && raiz.rotuloRotaVisivel(modelData)
+            width: textoRota.implicitWidth + 16
+            height: 21
+            radius: 7
+            color: "#E607111F"
             border.color: modelData.cor
-            border.width: 2
+            border.width: 1
 
             Text {
                 id: textoRota
