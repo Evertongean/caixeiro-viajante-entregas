@@ -4,11 +4,10 @@ Projeto acadêmico em Python para representar uma rede de entregas como grafo
 não direcionado e ponderado, estudar Dijkstra e o Problema do Caixeiro
 Viajante (TSP) e visualizar o cenário em uma aplicação desktop 3D.
 
-A nova interface foi reconstruída do zero. Ela apresenta os modelos fornecidos
-em `assets/models/cidade.glb` e `assets/models/carro.glb`, navegação de câmera,
-controles preparados para as próximas etapas e cartões de estado neutros. O
-editor de ruas, o cálculo visual de rotas e a missão animada ainda não fazem
-parte desta entrega.
+A interface apresenta os modelos fornecidos em `assets/models/cidade.glb` e
+`assets/models/carro.glb`, navegação de câmera e um editor que cadastra pontos
+e ruas diretamente sobre a geometria 3D. O cálculo visual de rotas e a missão
+animada permanecem reservados para as próximas etapas.
 
 ## Requisitos
 
@@ -48,12 +47,15 @@ python3 main.py
 │   └── caixeiro_viajante.py
 ├── models/
 │   ├── grafo.py
-│   └── persistencia.py
+│   ├── persistencia.py
+│   └── projeto_cidade.py     # grafo e metadados espaciais versionados
 ├── ui/
 │   ├── assets_3d.py          # valida GLB e gerencia o cache Balsam
 │   ├── camera_orbital.py     # estado matemático da câmera
 │   ├── cena_3d.qml           # cena Qt Quick 3D única
-│   ├── janela_principal.py   # layout e controles
+│   ├── dialogos_editor.py    # confirmação de pontos, superfícies e pesos
+│   ├── editor_cidade.py      # operações espaciais sobre o grafo oficial
+│   ├── janela_principal.py   # layout, modos e fluxos do editor
 │   ├── tema.py               # paleta azul-marinho e estilos
 │   └── visualizacao_3d.py    # ponte QWidget/Qt Quick 3D
 ├── tests/
@@ -72,9 +74,37 @@ A janela possui três regiões:
 - painel de controles rolável à direita;
 - quatro cartões inferiores para distância, percurso, clientes e status.
 
-Os controles da câmera e do enquadramento são funcionais. Ações que pertencem
-às próximas entregas aparecem explicitamente desabilitadas e identificadas
+Os controles da câmera, do enquadramento e da seção **Editar cidade** são
+funcionais. O cálculo visual e a missão aparecem explicitamente desabilitados
 como “Em breve”; nenhum botão simula uma operação inexistente.
+
+### Editor visual
+
+O clique é resolvido por `View3D.pick()`. A cena devolve a malha, o material e
+`scenePosition`, portanto a posição já considera a hierarquia e a escala do
+GLB. O grafo usa o plano `(x, z)` da cena e o projeto conserva também a
+coordenada vertical completa `(x, y, z)`.
+
+Os nomes do asset são genéricos e não identificam as ruas com segurança. Por
+isso nenhuma malha é considerada trafegável automaticamente:
+
+1. ative **Classificar superfície**;
+2. clique no asfalto e marque a malha como **Rua trafegável**;
+3. use **Adicionar ponto**, **Adicionar cliente** ou **Definir depósito** e
+   clique sobre uma malha já classificada;
+4. confira identificador, nome e tipo no diálogo; a posição não é digitada;
+5. para uma conexão, ative **Criar rua**, selecione os dois marcadores,
+   acrescente curvas clicando no asfalto e confirme o peso oficial.
+
+O botão **Desfazer** remove primeiro a última curva e depois os extremos; o
+botão **Cancelar** descarta toda a prévia. Em **Navegar**, marcadores e linhas
+podem ser selecionados para edição, reposicionamento ou exclusão. Exclusões
+pedem confirmação. Azul identifica o depósito, verde identifica clientes,
+cinza identifica cruzamentos e laranja identifica a operação temporária.
+
+Ao confirmar uma rua, o diálogo mostra o comprimento geométrico, o fator
+configurável em km/unidade e a sugestão resultante. O peso oficial continua
+sendo um campo separado, validado pelo grafo e usado por Dijkstra e TSP.
 
 ### Câmera
 
@@ -126,9 +156,14 @@ O cenário de demonstração confirma:
 
 ## Persistência
 
-`models/persistencia.py` salva e carrega somente os dados JSON do grafo:
-depósito, vértices, tipos, coordenadas, arestas e pesos. A persistência não é
-misturada com câmera, renderização ou cache 3D.
+Os botões **Salvar** e **Abrir** usam o formato versionado de
+`models/projeto_cidade.py`. Ele armazena o grafo, posições 3D, polilinhas,
+classificações manuais, fator de conversão e referências dos GLBs. Os binários
+dos modelos não são incorporados ao JSON. Arquivos antigos de
+`models/persistencia.py` continuam aceitos; seus vértices sem posição espacial
+recebem uma disposição inicial aproximada e podem ser reposicionados sobre
+ruas classificadas. O carregamento é transacional: um JSON inválido não
+substitui o projeto aberto.
 
 ## Testes
 
@@ -137,11 +172,14 @@ QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
 python3 -m compileall -q algorithms models ui main.py gui_main.py tests
 ```
 
-A suíte cobre o núcleo matemático, persistência, inspeção dos GLBs, cache de
-conversão, câmera orbital, zoom, enquadramento, referências dos modelos,
-estados dos controles, inicialização QML, proporção do layout e
-redimensionamento.
+A suíte cobre o núcleo matemático, os formatos novo e legado, classificação de
+superfícies, criação/edição/exclusão de vértices e ruas, coordenadas, curvas,
+pesos, consistência visual, ponte de picking, execução de Dijkstra/TSP após
+edições, inspeção dos GLBs, câmera e inicialização QML.
 
-O backend `offscreen` pode validar a estrutura da cena sem oferecer uma API 3D
-real. A confirmação final de materiais, iluminação, enquadramento e fluidez da
-navegação deve ser feita executando `gui_main.py` em uma sessão gráfica.
+O backend `offscreen` valida a estrutura sem oferecer uma API 3D real. A
+validação desta versão também foi executada com OpenGL: cidade e carro foram
+materializados e `View3D.pick()` retornou impactos reais com posição, nome da
+malha e material. Como a distinção semântica do asset não é confiável, a
+classificação rua/calçada/bloqueio continua sendo uma verificação manual
+obrigatória do usuário.

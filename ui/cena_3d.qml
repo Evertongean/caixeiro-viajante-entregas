@@ -1,9 +1,21 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick 2.15
 import QtQuick3D 6.5
 
 Item {
     id: raiz
     objectName: "raizCena3D"
+
+    signal pontoSelecionado(real x, real y, real z, string objeto,
+                            string material, bool encontrado)
+    property real pickX: -1
+    property real pickY: -1
+    property string modoInteracao: "navegar"
+    onPickYChanged: {
+        if (pickX >= 0 && pickY >= 0)
+            executarPick(pickX, pickY)
+    }
 
     property url cidadeFonte
     property url carroFonte
@@ -22,6 +34,64 @@ Item {
     property bool cidadePronta: cidadeLoader.item !== null
     property bool carroPronto: carroLoader.item !== null
     property int modelosProntos: (cidadePronta ? 1 : 0) + (carroPronto ? 1 : 0)
+    property var marcadores: []
+    property var segmentosRuas: []
+    property var segmentosPrevia: []
+    property bool marcadorTemporarioVisivel: false
+    property vector3d marcadorTemporarioPosicao: Qt.vector3d(0, 0, 0)
+
+    function tornarSelecionavel(no) {
+        if (!no)
+            return
+        if (no.pickable !== undefined)
+            no.pickable = true
+        if (no.children) {
+            for (let indice = 0; indice < no.children.length; ++indice)
+                tornarSelecionavel(no.children[indice])
+        }
+    }
+
+    function executarPick(x, y) {
+        const resultado = visualizacao.pick(x, y)
+        if (!resultado.objectHit) {
+            pontoSelecionado(0, 0, 0, "", "", false)
+            return
+        }
+        const objeto = resultado.objectHit.objectName || "malha-sem-nome"
+        let material = ""
+        try {
+            if (resultado.objectHit.materials
+                    && resultado.objectHit.materials.length > 0)
+                material = resultado.objectHit.materials[0].objectName || ""
+        } catch (erro) {
+            material = ""
+        }
+        const ponto = resultado.scenePosition
+        pontoSelecionado(ponto.x, ponto.y, ponto.z, objeto, material, true)
+    }
+
+    function centroSegmento(item) {
+        return Qt.vector3d((item.ax + item.bx) / 2,
+                           (item.ay + item.by) / 2,
+                           (item.az + item.bz) / 2)
+    }
+
+    function comprimentoSegmento(item) {
+        const dx = item.bx - item.ax
+        const dy = item.by - item.ay
+        const dz = item.bz - item.az
+        return Math.sqrt(dx * dx + dy * dy + dz * dz)
+    }
+
+    function rotacaoSegmento(item) {
+        const dx = item.bx - item.ax
+        const dy = item.by - item.ay
+        const dz = item.bz - item.az
+        const horizontal = Math.sqrt(dx * dx + dz * dz)
+        const yaw = Math.atan2(dx, dz) * 180 / Math.PI
+        const pitch = -Math.atan2(dy, horizontal) * 180 / Math.PI
+        return Qt.vector3d(pitch, yaw, 0)
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -96,6 +166,10 @@ Item {
             scale: Qt.vector3d(
                 raiz.escalaCidade, raiz.escalaCidade, raiz.escalaCidade
             )
+            onStatusChanged: {
+                if (item)
+                    raiz.tornarSelecionavel(item)
+            }
         }
 
         Loader3D {
@@ -114,6 +188,121 @@ Item {
                 raiz.escalaCarro, raiz.escalaCarro, raiz.escalaCarro
             )
             eulerRotation: Qt.vector3d(0, raiz.rotacaoCarro, 0)
+        }
+
+        Repeater3D {
+            model: raiz.segmentosRuas
+            delegate: Model {
+                id: segmentoRua
+                required property var modelData
+                objectName: "aresta:" + modelData.aresta
+                source: "#Cube"
+                pickable: raiz.modoInteracao === "navegar"
+                position: raiz.centroSegmento(modelData)
+                eulerRotation: raiz.rotacaoSegmento(modelData)
+                scale: Qt.vector3d(
+                    0.00010,
+                    0.00010,
+                    raiz.comprimentoSegmento(modelData) / 100
+                )
+                materials: PrincipledMaterial {
+                    baseColor: segmentoRua.modelData.cor
+                    emissiveFactor: Qt.vector3d(0.12, 0.25, 0.40)
+                    roughness: 0.35
+                }
+            }
+        }
+
+        Repeater3D {
+            model: raiz.segmentosPrevia
+            delegate: Model {
+                id: segmentoPrevia
+                required property var modelData
+                objectName: "previa-rua"
+                source: "#Cube"
+                pickable: false
+                position: raiz.centroSegmento(modelData)
+                eulerRotation: raiz.rotacaoSegmento(modelData)
+                scale: Qt.vector3d(
+                    0.00014,
+                    0.00014,
+                    raiz.comprimentoSegmento(modelData) / 100
+                )
+                materials: PrincipledMaterial {
+                    baseColor: "#F59E0B"
+                    emissiveFactor: Qt.vector3d(0.45, 0.20, 0.02)
+                    roughness: 0.28
+                }
+            }
+        }
+
+        Repeater3D {
+            model: raiz.marcadores
+            delegate: Model {
+                id: marcador3D
+                required property var modelData
+                objectName: "vertice:" + modelData.id
+                source: "#Sphere"
+                pickable: true
+                position: Qt.vector3d(
+                    modelData.x, modelData.y + 0.045, modelData.z
+                )
+                scale: Qt.vector3d(0.00042, 0.00042, 0.00042)
+                materials: PrincipledMaterial {
+                    baseColor: marcador3D.modelData.cor
+                    emissiveFactor: Qt.vector3d(0.16, 0.16, 0.16)
+                    roughness: 0.24
+                }
+            }
+        }
+
+        Model {
+            objectName: "marcador-temporario"
+            source: "#Sphere"
+            visible: raiz.marcadorTemporarioVisivel
+            pickable: false
+            position: Qt.vector3d(
+                raiz.marcadorTemporarioPosicao.x,
+                raiz.marcadorTemporarioPosicao.y + 0.045,
+                raiz.marcadorTemporarioPosicao.z
+            )
+            scale: Qt.vector3d(0.00050, 0.00050, 0.00050)
+            materials: PrincipledMaterial {
+                baseColor: "#F59E0B"
+                emissiveFactor: Qt.vector3d(0.55, 0.24, 0.02)
+                roughness: 0.20
+            }
+        }
+    }
+
+    Repeater {
+        model: raiz.marcadores
+        delegate: Rectangle {
+            id: etiquetaMarcador
+            required property var modelData
+            property vector3d projetado: visualizacao.mapFrom3DScene(
+                Qt.vector3d(modelData.x, modelData.y + 0.095, modelData.z)
+            )
+            x: projetado.x - width / 2 + raiz.cameraYaw * 0
+            y: projetado.y - height + raiz.cameraPitch * 0
+            z: 20
+            visible: projetado.z > 0
+            width: textoMarcador.implicitWidth + 16
+            height: 24
+            radius: 7
+            color: "#E6111C2D"
+            border.color: modelData.cor
+            border.width: 1
+
+            Text {
+                id: textoMarcador
+                anchors.centerIn: parent
+                color: "#F4F8FF"
+                font.pixelSize: 10
+                font.weight: Font.DemiBold
+                text: etiquetaMarcador.modelData.id + " · "
+                      + etiquetaMarcador.modelData.nome
+            }
         }
     }
 

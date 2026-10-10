@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -54,6 +56,14 @@ class TestNovaInterface(unittest.TestCase):
         self.assertTrue(cidade.is_file())
         self.assertTrue(carro.is_file())
 
+    def test_qml_usa_picking_3d_e_posicao_real_da_cena(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("visualizacao.pick(x, y)", qml)
+        self.assertIn("resultado.scenePosition", qml)
+        self.assertIn("resultado.objectHit", qml)
+
     def test_divisao_inicial_aproxima_setenta_e_cinco_por_cento(self) -> None:
         janela = self.criar_janela()
         tamanhos = janela.divisor.sizes()
@@ -95,6 +105,17 @@ class TestNovaInterface(unittest.TestCase):
         self.assertGreaterEqual(janela.visualizacao.width(), 560)
         self.assertGreaterEqual(janela.visualizacao.height(), 380)
 
+    def test_projeto_invalido_nao_substitui_o_grafo_atual(self) -> None:
+        janela = self.criar_janela()
+        grafo_atual = janela.grafo
+        with tempfile.TemporaryDirectory() as pasta:
+            invalido = Path(pasta) / "invalido.json"
+            invalido.write_text("{não é json", encoding="utf-8")
+            with patch("ui.janela_principal.QMessageBox.warning"):
+                self.assertFalse(janela.abrir_projeto(invalido))
+        self.assertIs(janela.grafo, grafo_atual)
+        self.assertIs(janela.projeto.grafo, grafo_atual)
+
     def test_inicializa_qml_modelos_camera_e_cache_reais(self) -> None:
         with tempfile.TemporaryDirectory() as cache:
             janela = JanelaPrincipal(
@@ -116,6 +137,17 @@ class TestNovaInterface(unittest.TestCase):
             self.assertIsNotNone(visualizacao.info_cidade)
             self.assertIsNotNone(visualizacao.info_carro)
             self.assertTrue(visualizacao.modelos_visiveis_na_cena)
+            self.assertTrue(all(botao.isEnabled() for botao in janela.botoes_edicao))
+            recebidos = []
+            visualizacao.ponto_selecionado.connect(lambda *dados: recebidos.append(dados))
+            visualizacao.rootObject().pontoSelecionado.emit(
+                1.25, 0.5, -2.0, "Object_42", "gray", True
+            )
+            self.aplicacao.processEvents()
+            self.assertEqual(
+                recebidos[-1],
+                (1.25, 0.5, -2.0, "Object_42", "gray", True),
+            )
 
             distancia = visualizacao.camera.distancia
             visualizacao.orbitar(25, -10)

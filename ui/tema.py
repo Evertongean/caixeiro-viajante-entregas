@@ -40,6 +40,13 @@ QLabel#tituloAplicacao {
 QLabel#subtituloAplicacao, QLabel#textoSecundario, QLabel#notaFutura {
     color: #8498B2;
 }
+QLabel#instrucaoEditor {
+    color: #C5D8EE;
+    background: #0A1727;
+    border: 1px solid #29445F;
+    border-radius: 8px;
+    padding: 9px;
+}
 QLabel#seloAplicacao {
     color: #78B9FF;
     background: #102A47;

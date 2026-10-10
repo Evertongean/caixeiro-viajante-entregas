@@ -9,6 +9,13 @@ from .persistencia import (
     salvar_grafo,
     validar_grafo,
 )
+from .projeto_cidade import (
+    ClassificacaoSuperficie,
+    GeometriaRua,
+    ProjetoCidade,
+    carregar_projeto_cidade,
+    salvar_projeto_cidade,
+)
 
 __all__ = [
     "Aresta",
@@ -22,4 +29,9 @@ __all__ = [
     "grafo_para_dados",
     "salvar_grafo",
     "validar_grafo",
+    "ClassificacaoSuperficie",
+    "GeometriaRua",
+    "ProjetoCidade",
+    "carregar_projeto_cidade",
+    "salvar_projeto_cidade",
 ]

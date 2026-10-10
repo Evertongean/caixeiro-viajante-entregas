@@ -31,6 +31,7 @@ class Visualizacao3D(QQuickWidget):
 
     estado_alterado = Signal(str, bool)
     camera_alterada = Signal(str)
+    ponto_selecionado = Signal(float, float, float, str, str, bool)
 
     def __init__(
         self,
@@ -69,6 +70,8 @@ class Visualizacao3D(QQuickWidget):
         self._inicializacao_agendada = False
         self._posicao_mouse = None
         self._botao_mouse = None
+        self._mouse_arrastou = False
+        self._modo_interacao = "navegar"
 
     @property
     def referencias_modelos(self) -> tuple[Path, Path]:
@@ -150,6 +153,9 @@ class Visualizacao3D(QQuickWidget):
             sinal = getattr(raiz, "modelosProntosChanged", None)
             if sinal is not None:
                 sinal.connect(self._atualizar_estado_modelos)
+            sinal_pick = getattr(raiz, "pontoSelecionado", None)
+            if sinal_pick is not None:
+                sinal_pick.connect(self._receber_pick)
             QTimer.singleShot(0, self._atualizar_estado_modelos)
             self._registrar(
                 "Modelos preparados; aguardando a materialização gráfica da cena."
@@ -244,6 +250,76 @@ class Visualizacao3D(QQuickWidget):
         self.camera.preparar_camera_atras_do_carro(self.posicao_carro)
         self._aplicar_camera()
 
+    def definir_modo_interacao(self, modo: str) -> None:
+        if modo not in {
+            "navegar",
+            "adicionar_ponto",
+            "criar_rua",
+            "classificar_superficie",
+            "reposicionar_vertice",
+        }:
+            raise ValueError(f"Modo de interação desconhecido: {modo}")
+        self._modo_interacao = modo
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("modoInteracao", modo)
+        self.setCursor(
+            Qt.CursorShape.ArrowCursor
+            if modo == "navegar"
+            else Qt.CursorShape.CrossCursor
+        )
+
+    def _receber_pick(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        objeto: str,
+        material: str,
+        encontrado: bool,
+    ) -> None:
+        self.ponto_selecionado.emit(
+            float(x),
+            float(y),
+            float(z),
+            str(objeto),
+            str(material),
+            bool(encontrado),
+        )
+
+    def solicitar_pick(self, x: float, y: float) -> None:
+        raiz = self.rootObject()
+        if raiz is None:
+            return
+        raiz.setProperty("pickY", -1.0)
+        raiz.setProperty("pickX", float(x))
+        raiz.setProperty("pickY", float(y))
+
+    def atualizar_marcadores(self, marcadores: list[dict[str, object]]) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("marcadores", list(marcadores))
+
+    def atualizar_ruas(self, segmentos: list[dict[str, object]]) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("segmentosRuas", list(segmentos))
+
+    def atualizar_previa_rua(self, segmentos: list[dict[str, object]]) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("segmentosPrevia", list(segmentos))
+
+    def mostrar_marcador_temporario(
+        self, posicao: tuple[float, float, float] | None
+    ) -> None:
+        raiz = self.rootObject()
+        if raiz is None:
+            return
+        raiz.setProperty("marcadorTemporarioVisivel", posicao is not None)
+        if posicao is not None:
+            raiz.setProperty("marcadorTemporarioPosicao", QVector3D(*posicao))
+
     def orbitar(self, delta_x: float, delta_y: float) -> None:
         self.camera.orbitar(delta_x, delta_y)
         self._aplicar_camera()
@@ -263,6 +339,7 @@ class Visualizacao3D(QQuickWidget):
         ):
             self._posicao_mouse = evento.position()
             self._botao_mouse = evento.button()
+            self._mouse_arrastou = False
             evento.accept()
             return
         super().mousePressEvent(evento)
@@ -271,9 +348,14 @@ class Visualizacao3D(QQuickWidget):
         if self._posicao_mouse is not None and self._botao_mouse is not None:
             delta = evento.position() - self._posicao_mouse
             self._posicao_mouse = evento.position()
-            if self._botao_mouse == Qt.MouseButton.LeftButton:
+            if abs(delta.x()) + abs(delta.y()) > 2:
+                self._mouse_arrastou = True
+            if (
+                self._botao_mouse == Qt.MouseButton.LeftButton
+                and self._modo_interacao == "navegar"
+            ):
                 self.orbitar(delta.x(), delta.y())
-            else:
+            elif self._botao_mouse == Qt.MouseButton.RightButton:
                 self.deslocar(delta.x(), delta.y())
             evento.accept()
             return
@@ -281,8 +363,16 @@ class Visualizacao3D(QQuickWidget):
 
     def mouseReleaseEvent(self, evento) -> None:  # noqa: N802 - API Qt
         if evento.button() == self._botao_mouse:
+            posicao = evento.position()
+            deve_selecionar = (
+                evento.button() == Qt.MouseButton.LeftButton
+                and not self._mouse_arrastou
+            )
             self._posicao_mouse = None
             self._botao_mouse = None
+            self._mouse_arrastou = False
+            if deve_selecionar:
+                self.solicitar_pick(posicao.x(), posicao.y())
             evento.accept()
             return
         super().mouseReleaseEvent(evento)
