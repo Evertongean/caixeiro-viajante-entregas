@@ -1,24 +1,43 @@
-# Delivery Route — Grafos e otimização de rotas
+# Delivery Route — Simulador de otimização de rotas
 
-Projeto acadêmico em Python para representar uma rede de entregas como um
-grafo não direcionado e ponderado e estudar dois problemas clássicos:
+Projeto acadêmico em Python para representar uma rede de entregas como grafo
+não direcionado e ponderado, estudar Dijkstra e o Problema do Caixeiro
+Viajante (TSP) e visualizar o cenário em uma aplicação desktop 3D.
 
-- menor caminho entre dois pontos, resolvido com Dijkstra;
-- melhor circuito de entregas, resolvido exatamente como um Problema do
-  Caixeiro Viajante (TSP).
-
-Esta versão funciona inteiramente no terminal e não possui interface gráfica.
-Uma nova interface poderá ser construída futuramente sem alterar o núcleo
-matemático.
+A nova interface foi reconstruída do zero. Ela apresenta os modelos fornecidos
+em `assets/models/cidade.glb` e `assets/models/carro.glb`, navegação de câmera,
+controles preparados para as próximas etapas e cartões de estado neutros. O
+editor de ruas, o cálculo visual de rotas e a missão animada ainda não fazem
+parte desta entrega.
 
 ## Requisitos
 
 - Python 3.10 ou mais recente;
-- nenhuma dependência externa.
+- PySide6 6.8 ou mais recente, instalado por `requirements.txt`;
+- backend gráfico Qt compatível com OpenGL, Vulkan, Metal ou Direct3D para a
+  renderização 3D real.
 
-Os algoritmos e a persistência usam apenas a biblioteca padrão do Python. A
-pasta opcional `assets/` guarda modelos antigos para eventual uso futuro, mas
-não participa da execução.
+Instalação recomendada:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+## Executar
+
+Interface desktop:
+
+```bash
+python3 gui_main.py
+```
+
+Demonstração textual dos algoritmos:
+
+```bash
+python3 main.py
+```
 
 ## Estrutura
 
@@ -30,129 +49,99 @@ não participa da execução.
 ├── models/
 │   ├── grafo.py
 │   └── persistencia.py
+├── ui/
+│   ├── assets_3d.py          # valida GLB e gerencia o cache Balsam
+│   ├── camera_orbital.py     # estado matemático da câmera
+│   ├── cena_3d.qml           # cena Qt Quick 3D única
+│   ├── janela_principal.py   # layout e controles
+│   ├── tema.py               # paleta azul-marinho e estilos
+│   └── visualizacao_3d.py    # ponte QWidget/Qt Quick 3D
 ├── tests/
-│   ├── test_grafo.py
-│   ├── test_dijkstra.py
-│   ├── test_caixeiro_viajante.py
-│   └── test_persistencia.py
-├── assets/models/        # opcional; não é usado pelo núcleo
-├── main.py
-└── requirements.txt
+├── assets/models/
+│   ├── cidade.glb
+│   └── carro.glb
+├── gui_main.py
+└── main.py
 ```
 
-## Modelo do grafo
+## Interface
 
-`models/grafo.py` implementa um grafo não direcionado com lista de
-adjacências. Cada `Vertice` possui identificador, nome, tipo (depósito,
-cliente ou cruzamento) e coordenadas. Cada `Aresta` liga dois vértices e tem um
-peso positivo e finito, interpretado como distância em quilômetros.
+A janela possui três regiões:
 
-O modelo permite adicionar, editar e remover vértices e arestas, consultar
-vizinhos e pesos, identificar o depósito e os clientes e validar invariantes
-como nomes únicos, ausência de laços e existência de no máximo um depósito.
+- cidade 3D ocupando aproximadamente 75% da área horizontal;
+- painel de controles rolável à direita;
+- quatro cartões inferiores para distância, percurso, clientes e status.
 
-Exemplo de construção por código:
+Os controles da câmera e do enquadramento são funcionais. Ações que pertencem
+às próximas entregas aparecem explicitamente desabilitadas e identificadas
+como “Em breve”; nenhum botão simula uma operação inexistente.
 
-```python
-from models.grafo import Grafo, TipoVertice, Vertice
+### Câmera
 
-grafo = Grafo()
-grafo.adicionar_vertice(
-    Vertice("D", "Depósito", TipoVertice.DEPOSITO, 0, 0)
-)
-grafo.adicionar_vertice(
-    Vertice("A", "Cliente A", TipoVertice.CLIENTE, 2, 1)
-)
-grafo.adicionar_aresta("D", "A", 3.5)
+- botão esquerdo + arrastar: órbita;
+- botão direito + arrastar: deslocamento do alvo;
+- roda do mouse: zoom com limites;
+- **Enquadrar**: restaura a vista calculada pela caixa real da cidade;
+- **Visão aérea**: muda somente a câmera;
+- **Focar carro**: enquadra o veículo;
+- **Câmera livre** e **Atrás do carro**: alternam a estrutura preparada para a
+  futura missão.
 
-grafo.atualizar_peso_aresta("D", "A", 4)
-grafo.atualizar_vertice(
-    "A", nome="Cliente A", tipo=TipoVertice.CLIENTE, x=3, y=2
-)
-```
+Nenhuma operação de câmera modifica a geometria dos modelos.
 
-Também estão disponíveis `remover_aresta` e `remover_vertice`. A função
-`criar_cenario_exemplo()` monta o cenário compartilhado pela demonstração e
-pelos testes.
+## Carregamento dos GLBs
 
-## Dijkstra
+Qt Quick 3D não usa um GLB diretamente em `Model.source`. Antes de montar a
+cena, `ui/assets_3d.py`:
 
-`algorithms/dijkstra.py` calcula o menor caminho entre uma origem e um destino
-com pesos positivos. O resultado informa o percurso, a distância total e se o
-destino foi alcançado. `dijkstra_todos` calcula as menores distâncias da origem
-para todos os vértices e é reutilizado pelo TSP.
+1. valida o cabeçalho glTF 2.0;
+2. calcula a caixa do modelo considerando os transforms dos nós;
+3. chama o `pyside6-balsam` da mesma instalação do PySide6;
+4. armazena QML, malhas e texturas em um cache versionado;
+5. reutiliza o resultado enquanto arquivo, data e versão do PySide6 não mudam.
 
-Com uma fila de prioridade, a complexidade de tempo é
-`O((V + E) log V)` e a de espaço é `O(V + E)`.
+O cache padrão fica em `~/.cache/delivery-route/balsam` no Linux e pode ser
+alterado pela variável `DELIVERY_ROUTE_CACHE_DIR`. Os GLBs originais nunca são
+modificados. A cena usa `Loader3D`, duas fontes de luz, câmera em perspectiva e
+as escalas próprias dos assets existentes.
 
-```python
-from algorithms.dijkstra import dijkstra
-from models.grafo import criar_cenario_exemplo
+O carregamento é adiado até a área 3D estar visível e possuir dimensões. A
+interface diferencia uma árvore QML corretamente carregada de um backend
+gráfico realmente capaz de desenhar Qt Quick 3D, evitando interpretar uma tela
+escura como sucesso.
 
-resultado = dijkstra(criar_cenario_exemplo(), "D", "B")
-print(resultado.caminho)          # ['D', 'X', 'A', 'B']
-print(resultado.distancia_total)  # 6.0
-```
+## Núcleo matemático
 
-## Caixeiro Viajante
+`models/grafo.py` mantém vértices, arestas, pesos e invariantes do grafo.
+`algorithms/dijkstra.py` encontra caminhos mínimos em
+`O((V + E) log V)`. `algorithms/caixeiro_viajante.py` avalia exatamente as
+permutações dos clientes, com custo fatorial `O(C! · C)` e limite padrão de
+oito clientes. As distâncias entre paradas do TSP são obtidas com Dijkstra.
 
-`algorithms/caixeiro_viajante.py` usa a solução exata existente por força
-bruta. Todas as ordens dos clientes são avaliadas; as distâncias entre os
-pontos relevantes são obtidas por Dijkstra. O resultado distingue a ordem de
-atendimento do percurso completo no grafo.
-
-Para `C` clientes, a enumeração custa `O(C! · C)`. O pré-cálculo dos menores
-caminhos custa `O((C + 1)(V + E) log V)`. Por isso, o limite padrão é de oito
-clientes e pode ser configurado na chamada.
-
-```python
-from algorithms.caixeiro_viajante import caixeiro_viajante
-from models.grafo import criar_cenario_exemplo
-
-resultado = caixeiro_viajante(criar_cenario_exemplo())
-print(resultado.ordem_entregas)
-print(resultado.percurso_completo)
-print(resultado.distancia_total)
-```
-
-## Cenário de demonstração
-
-Execute:
-
-```bash
-python3 main.py
-```
-
-A demonstração lista os vértices e as arestas e confirma:
+O cenário de demonstração confirma:
 
 - Dijkstra de `D` até `B`: `D → X → A → B`, com 6 km;
-- TSP para `A`, `B` e `C`: ordem ótima
-  `D → A → B → C → D`, percurso completo
-  `D → X → A → B → C → D`, com 15 km;
-- seis ordens de atendimento avaliadas.
+- TSP: ordem `D → A → B → C → D` e percurso completo
+  `D → X → A → B → C → D`, com 15 km e seis ordens avaliadas.
 
-## Persistência JSON
+## Persistência
 
-`models/persistencia.py` salva e carrega somente dados do grafo: versão do
-formato, depósito, vértices, tipos, coordenadas, arestas e pesos. O carregamento
-valida todo o documento antes de devolver o novo grafo e não contém estado de
-interface, câmera ou renderização.
+`models/persistencia.py` salva e carrega somente os dados JSON do grafo:
+depósito, vértices, tipos, coordenadas, arestas e pesos. A persistência não é
+misturada com câmera, renderização ou cache 3D.
 
-```python
-from models.grafo import criar_cenario_exemplo
-from models.persistencia import carregar_grafo, salvar_grafo
-
-salvar_grafo(criar_cenario_exemplo(), "cenario.json")
-grafo = carregar_grafo("cenario.json")
-```
-
-## Testes e validação
+## Testes
 
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q algorithms models main.py tests
+QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
+python3 -m compileall -q algorithms models ui main.py gui_main.py tests
 ```
 
-Os testes cobrem as invariantes e operações do grafo, caminhos mínimos,
-entradas inválidas e vértices inacessíveis, solução exata e limite do TSP e a
-serialização JSON.
+A suíte cobre o núcleo matemático, persistência, inspeção dos GLBs, cache de
+conversão, câmera orbital, zoom, enquadramento, referências dos modelos,
+estados dos controles, inicialização QML, proporção do layout e
+redimensionamento.
+
+O backend `offscreen` pode validar a estrutura da cena sem oferecer uma API 3D
+real. A confirmação final de materiais, iluminação, enquadramento e fluidez da
+navegação deve ser feita executando `gui_main.py` em uma sessão gráfica.
