@@ -73,6 +73,36 @@ QFrame#painel, QFrame#painelResultados, QFrame#areaVisualizacao {{
     border: 1px solid #2D3A4F;
     border-radius: 12px;
 }}
+QWidget#cidade3D {{
+    background-color: #0B1220;
+    border: 1px solid #2D3A4F;
+    border-radius: 8px;
+}}
+QWidget#controlesCidade3D {{
+    background-color: #182235;
+    border-top: 1px solid #344258;
+}}
+QPushButton#botao3D {{
+    min-height: 27px;
+    padding: 0 8px;
+    font-size: 11px;
+}}
+QProgressBar#progressoCidade3D {{
+    min-height: 14px;
+    border: 1px solid #344258;
+    border-radius: 6px;
+    background-color: #111827;
+    color: #E5E7EB;
+    text-align: center;
+}}
+QProgressBar#progressoCidade3D::chunk {{
+    background-color: #10B981;
+    border-radius: 5px;
+}}
+QLabel#estadoCidade3D {{
+    color: #CBD5E1;
+    font-size: 11px;
+}}
 QFrame#painelPassos {{
     background-color: #182235;
     border: 1px solid #344258;
@@ -135,6 +165,12 @@ QPushButton#botaoPrimario {{
     border-color: {AZUL_CLARO};
 }}
 QPushButton#botaoPrimario:hover {{ background-color: #3474DD; }}
+QPushButton#botaoMissao3D {{
+    background-color: #B45309;
+    border-color: #F59E0B;
+    color: #FFFBEB;
+}}
+QPushButton#botaoMissao3D:hover {{ background-color: #D97706; }}
 QPushButton#botaoFerramenta {{
     text-align: left;
     padding-left: 12px;

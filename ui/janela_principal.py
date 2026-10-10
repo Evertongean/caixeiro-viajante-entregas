@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QFileDialog,
     QHBoxLayout,
+    QLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -38,9 +39,11 @@ from models.grafo import Grafo, TipoVertice, Vertice, criar_cenario_exemplo
 from models.persistencia import ErroPersistencia, carregar_grafo, salvar_grafo
 
 from .editor_dialogos import DialogoAresta, DialogoArestaExistente, DialogoVertice
+from .cidade_3d import Cidade3DWidget
 from .execucao_passos import SessaoPassoAPasso
 from .mapa_cidade import MapaCidade
 from .painel_passos import PainelPassos
+from .painel_modelos_3d import PainelModelos3D
 from .painel_resultados import PainelResultados
 from .visualizador_grafo import VisualizadorGrafo
 
@@ -66,7 +69,9 @@ class JanelaPrincipal(QMainWindow):
 
         self.setWindowTitle("Delivery Route — Otimização de Entregas")
         self.resize(1300, 800)
-        self.setMinimumSize(960, 640)
+        # O conteúdo principal tem painéis com rolagem; 800x600 é o menor
+        # tamanho demonstrável sem remover controles essenciais.
+        self.setMinimumSize(800, 600)
         self._construir_interface()
         self._atualizar_dados_interface()
         QTimer.singleShot(0, self._enquadrar_todas_as_visualizacoes)
@@ -141,6 +146,7 @@ class JanelaPrincipal(QMainWindow):
         divisor.setStretchFactor(1, 1)
         divisor.setStretchFactor(2, 0)
         divisor.setSizes([235, 760, 290])
+        self._divisor_visualizacao = divisor
         layout_conteudo.addWidget(divisor, 1)
 
         self.painel_resultados = PainelResultados()
@@ -149,6 +155,7 @@ class JanelaPrincipal(QMainWindow):
         layout_conteudo.addWidget(self.painel_resultados)
         layout_raiz.addWidget(conteudo, 1)
         self.setCentralWidget(raiz)
+        self._ajustar_barra_superior()
 
     def _criar_menu_projeto(self) -> QMenuBar:
         """Cria os comandos persistentes sem misturar serialização à UI."""
@@ -181,8 +188,13 @@ class JanelaPrincipal(QMainWindow):
         barra.setObjectName("barraSuperior")
         barra.setFixedHeight(72)
         layout = QHBoxLayout(barra)
+        # A barra pode ser compactada sem impor sua largura natural à janela.
+        # Os elementos secundários são ocultados em resoluções estreitas por
+        # ``_ajustar_barra_superior``.
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         layout.setContentsMargins(18, 10, 18, 10)
         layout.setSpacing(12)
+        barra.setMinimumWidth(0)
 
         marca = QLabel("DR")
         marca.setObjectName("marca")
@@ -193,8 +205,11 @@ class JanelaPrincipal(QMainWindow):
         textos.setSpacing(1)
         titulo = QLabel("DELIVERY ROUTE")
         titulo.setObjectName("tituloAplicacao")
+        titulo.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.rotulo_titulo_aplicacao = titulo
         subtitulo = QLabel("Sistema Inteligente de Otimização de Entregas")
         subtitulo.setObjectName("subtituloAplicacao")
+        self.rotulo_subtitulo_aplicacao = subtitulo
         textos.addWidget(titulo)
         textos.addWidget(subtitulo)
         layout.addLayout(textos)
@@ -232,7 +247,76 @@ class JanelaPrincipal(QMainWindow):
         self.botao_grafo.setCheckable(True)
         self.botao_grafo.clicked.connect(lambda: self.definir_modo("grafo"))
         layout.addWidget(self.botao_grafo)
+
+        self.botao_cidade_3d = QPushButton("Cidade 3D")
+        self.botao_cidade_3d.setObjectName("botao3D")
+        self.botao_cidade_3d.setCheckable(True)
+        self.botao_cidade_3d.setToolTip("Abrir o protótipo 3D navegável da cidade")
+        self.botao_cidade_3d.clicked.connect(lambda: self.definir_modo("cidade3d"))
+        layout.addWidget(self.botao_cidade_3d)
         return barra
+
+    def _ajustar_barra_superior(self) -> None:
+        """Mantém os controles do cabeçalho acessíveis em larguras menores."""
+        if not hasattr(self, "rotulo_subtitulo_aplicacao"):
+            return
+        compacto = self.width() < 1_000
+        self.rotulo_subtitulo_aplicacao.setVisible(not compacto)
+        self.rotulo_cenario.setVisible(not compacto)
+        self.botao_enquadrar.setText(
+            "Enquadrar" if compacto else "Restaurar enquadramento"
+        )
+        # O cabeçalho mantém todos os modos acessíveis mesmo na largura mínima
+        # prevista para a janela. Os tooltips preservam os nomes completos.
+        self.botao_visualizacao.setText("Vis." if compacto else "Visualização")
+        self.botao_visualizacao.setToolTip("Modo de visualização")
+        self.botao_edicao.setText("Ed." if compacto else "Edição")
+        self.botao_edicao.setToolTip("Modo de edição")
+        self.botao_cidade.setText("2D" if compacto else "Cidade")
+        self.botao_cidade.setToolTip("Cidade 2D")
+        self.botao_grafo.setText("Grafo")
+        self.botao_grafo.setToolTip("Representação matemática do grafo")
+        self.botao_cidade_3d.setText("3D" if compacto else "Cidade 3D")
+        barra = self.rotulo_titulo_aplicacao.parentWidget()
+        if barra is not None and barra.layout() is not None:
+            barra.layout().invalidate()
+            barra.layout().activate()
+        area = self.botao_enquadrar.parentWidget()
+        if area is not None and area.layout() is not None:
+            area.layout().invalidate()
+            area.layout().activate()
+        self._atualizar_titulo_visualizacao(compacto=compacto)
+
+    def _atualizar_titulo_visualizacao(self, *, compacto: bool | None = None) -> None:
+        if not hasattr(self, "titulo_visualizacao"):
+            return
+        if compacto is None:
+            compacto = self.width() < 1_000
+        if compacto:
+            texto = {
+                "cidade": "Cidade",
+                "grafo": "Grafo",
+                "cidade3d": (
+                    "Missão 3D"
+                    if hasattr(self, "cidade_3d") and self.cidade_3d.em_missao
+                    else "Cidade 3D"
+                ),
+            }.get(self._modo_atual, "Cidade")
+        else:
+            texto = {
+                "cidade": "Mapa da cidade",
+                "grafo": "Representação matemática do grafo",
+                "cidade3d": (
+                    "Missão 3D — terceira pessoa"
+                    if hasattr(self, "cidade_3d") and self.cidade_3d.em_missao
+                    else "Protótipo 3D navegável"
+                ),
+            }.get(self._modo_atual, "Mapa da cidade")
+        self.titulo_visualizacao.setText(texto)
+
+    def resizeEvent(self, evento) -> None:  # noqa: N802 - contrato Qt
+        super().resizeEvent(evento)
+        self._ajustar_barra_superior()
 
     def _criar_painel_ferramentas(self) -> QFrame:
         painel = QFrame()
@@ -247,6 +331,11 @@ class JanelaPrincipal(QMainWindow):
         rolagem.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         conteudo = QWidget()
         conteudo.setObjectName("conteudoPainel")
+        # O conteúdo deve acompanhar a viewport; sem esta política o tamanho
+        # natural dos controles pode deixar uma faixa horizontal cortada.
+        conteudo.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         layout = QVBoxLayout(conteudo)
         layout.setContentsMargins(14, 16, 14, 16)
         layout.setSpacing(6)
@@ -328,18 +417,25 @@ class JanelaPrincipal(QMainWindow):
         cabecalho.addWidget(self.titulo_visualizacao)
         cabecalho.addStretch(1)
         restaurar = QPushButton("Restaurar enquadramento")
+        restaurar.setToolTip("Restaurar enquadramento")
         restaurar.clicked.connect(self.restaurar_enquadramento)
+        self.botao_enquadrar = restaurar
         cabecalho.addWidget(restaurar)
         layout.addLayout(cabecalho)
 
         self.mapa_cidade = MapaCidade(self._grafo)
         self.visualizador_grafo = VisualizadorGrafo(self._grafo)
+        self.cidade_3d = Cidade3DWidget(self._grafo)
         self.mapa_cidade.vertice_selecionado.connect(self.selecionar_vertice)
         self.visualizador_grafo.vertice_selecionado.connect(self.selecionar_vertice)
+        self.cidade_3d.vertice_selecionado.connect(self.selecionar_vertice)
+        self.cidade_3d.missao_concluida.connect(self._missao_3d_concluida)
+        self.cidade_3d.voltar_planejamento.connect(self._voltar_da_missao_3d)
 
         self.pilha_visualizacoes = QStackedWidget()
         self.pilha_visualizacoes.addWidget(self.mapa_cidade)
         self.pilha_visualizacoes.addWidget(self.visualizador_grafo)
+        self.pilha_visualizacoes.addWidget(self.cidade_3d)
         layout.addWidget(self.pilha_visualizacoes, 1)
         return painel
 
@@ -356,6 +452,9 @@ class JanelaPrincipal(QMainWindow):
         rolagem.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         conteudo = QWidget()
         conteudo.setObjectName("conteudoPainel")
+        conteudo.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         layout = QVBoxLayout(conteudo)
         layout.setContentsMargins(14, 16, 14, 16)
         layout.setSpacing(9)
@@ -379,6 +478,36 @@ class JanelaPrincipal(QMainWindow):
         self.botao_calcular.setObjectName("botaoPrimario")
         self.botao_calcular.clicked.connect(self.calcular_rota)
         layout.addWidget(self.botao_calcular)
+        self.botao_iniciar_missao_3d = QPushButton("Iniciar missão 3D")
+        self.botao_iniciar_missao_3d.setObjectName("botaoMissao3D")
+        self.botao_iniciar_missao_3d.setToolTip(
+            "Abrir a simulação 3D em terceira pessoa para a rota calculada"
+        )
+        self.botao_iniciar_missao_3d.clicked.connect(self._iniciar_missao_3d)
+        self.botao_iniciar_missao_3d.setEnabled(False)
+        layout.addWidget(self.botao_iniciar_missao_3d)
+        self.painel_modelos_3d = PainelModelos3D()
+        self.painel_modelos_3d.configuracao_alterada.connect(
+            self._configuracao_modelos_3d_alterada
+        )
+        self.painel_modelos_3d.visualizar_solicitado.connect(
+            self._visualizar_modelos_3d
+        )
+        self.painel_modelos_3d.enquadrar_solicitado.connect(
+            self._enquadrar_cidade_3d
+        )
+        self.painel_modelos_3d.calibrar_solicitado.connect(
+            self._calibrar_cidade_3d
+        )
+        self.botao_selecionar_cidade_glb = self.painel_modelos_3d.botao_selecionar_cidade
+        self.botao_selecionar_carro_glb = self.painel_modelos_3d.botao_selecionar_carro
+        self.botao_restaurar_modelos_3d = self.painel_modelos_3d.botao_restaurar
+        self.botao_visualizar_modelos_3d = self.painel_modelos_3d.botao_visualizar
+        self.controle_escala_carro_glb = self.painel_modelos_3d.controle_escala_carro
+        self.controle_orientacao_carro_glb = self.painel_modelos_3d.controle_orientacao_carro
+        self.controle_altura_carro_glb = self.painel_modelos_3d.controle_altura_carro
+        self.controle_escala_cidade_glb = self.painel_modelos_3d.controle_escala_cidade
+        layout.addWidget(self.painel_modelos_3d)
         self.rotulo_aviso = QLabel("Configure uma rota e clique em calcular.")
         self.rotulo_aviso.setObjectName("aviso")
         self.rotulo_aviso.setWordWrap(True)
@@ -484,18 +613,42 @@ class JanelaPrincipal(QMainWindow):
             botao.setEnabled(habilitado)
 
     def definir_modo(self, modo: str) -> None:
-        if modo not in {"cidade", "grafo"}:
-            raise ValueError("O modo deve ser 'cidade' ou 'grafo'.")
+        if modo in {"cidade_3d", "cidade-3d", "3d"}:
+            modo = "cidade3d"
+        if modo not in {"cidade", "grafo", "cidade3d"}:
+            raise ValueError("O modo deve ser 'cidade', 'grafo' ou 'cidade3d'.")
         self._modo_atual = modo
-        cidade = modo == "cidade"
-        self.botao_cidade.setChecked(cidade)
-        self.botao_grafo.setChecked(not cidade)
-        self.pilha_visualizacoes.setCurrentIndex(0 if cidade else 1)
-        self.titulo_visualizacao.setText(
-            "Mapa da cidade" if cidade else "Representação matemática do grafo"
+        # Trocar a página do QStackedWidget pode recalcular o sizeHint do
+        # painel central (especialmente quando o QQuickWidget é criado). A
+        # navegação entre Cidade, Grafo e Cidade 3D não deve mover os divisores
+        # que o usuário já ajustou.
+        tamanhos_divisor = (
+            self._divisor_visualizacao.sizes()
+            if hasattr(self, "_divisor_visualizacao")
+            else []
         )
-        visualizacao = self.mapa_cidade if cidade else self.visualizador_grafo
+        cidade = modo == "cidade"
+        cidade_3d = modo == "cidade3d"
+        self.botao_cidade.setChecked(cidade)
+        self.botao_grafo.setChecked(modo == "grafo")
+        self.botao_cidade_3d.setChecked(cidade_3d)
+        self.pilha_visualizacoes.setCurrentIndex(
+            0 if cidade else 1 if modo == "grafo" else 2
+        )
+        if getattr(self.cidade_3d, "renderizador_qtquick3d", None) is not None:
+            cena_glb = self.cidade_3d.renderizador_qtquick3d
+            cena_glb.setVisible(cidade_3d and cena_glb.renderizacao_ativa)
+        self._atualizar_titulo_visualizacao()
+        visualizacao = (
+            self.mapa_cidade
+            if cidade
+            else self.visualizador_grafo
+            if modo == "grafo"
+            else self.cidade_3d
+        )
         visualizacao.selecionar_vertice(self._vertice_selecionado)
+        if len(tamanhos_divisor) == 3 and all(tamanho > 0 for tamanho in tamanhos_divisor):
+            QTimer.singleShot(0, lambda: self._divisor_visualizacao.setSizes(tamanhos_divisor))
 
     def carregar_cenario_exemplo(self) -> None:
         """Compatibilidade com o botão e com o código da primeira versão."""
@@ -664,10 +817,12 @@ class JanelaPrincipal(QMainWindow):
         self._vertice_selecionado = None
         self.mapa_cidade.carregar_grafo(grafo)
         self.visualizador_grafo.carregar_grafo(grafo)
+        self.cidade_3d.carregar_grafo(grafo)
         self.rotulo_cenario.setText(f"Cenário: {nome_cenario}")
         self.rotulo_detalhes.setText("Selecione um vértice no mapa ou no grafo.")
         self._atualizar_dados_interface()
         self.definir_modo_interface("visualizacao")
+        self._atualizar_titulo_visualizacao()
         self._atualizar_titulo_projeto()
         QTimer.singleShot(0, self._enquadrar_todas_as_visualizacoes)
 
@@ -778,9 +933,13 @@ class JanelaPrincipal(QMainWindow):
         self._algoritmo_resultado = None
         self.mapa_cidade.limpar_destaque_rota()
         self.visualizador_grafo.limpar_destaque_rota()
+        if self.cidade_3d.em_missao:
+            self.cidade_3d.sair_missao()
+        self.cidade_3d.limpar_destaque_rota()
         selecionado = self._vertice_selecionado
         self.mapa_cidade.carregar_grafo(self._grafo)
         self.visualizador_grafo.carregar_grafo(self._grafo)
+        self.cidade_3d.carregar_grafo(self._grafo)
         self._atualizar_dados_interface()
         if selecionado is not None and any(
             vertice.identificador == selecionado for vertice in self._grafo.listar_vertices()
@@ -790,6 +949,8 @@ class JanelaPrincipal(QMainWindow):
             self._vertice_selecionado = None
             self.rotulo_detalhes.setText("Selecione um vértice no mapa ou no grafo.")
         self.painel_resultados.exibir_grafo_alterado()
+        self._atualizar_botao_missao_3d()
+        self._atualizar_titulo_visualizacao()
         self.rotulo_aviso.setText(mensagem)
         QTimer.singleShot(0, self._enquadrar_todas_as_visualizacoes)
 
@@ -881,6 +1042,7 @@ class JanelaPrincipal(QMainWindow):
         self._vertice_selecionado = identificador
         self.mapa_cidade.selecionar_vertice(identificador)
         self.visualizador_grafo.selecionar_vertice(identificador)
+        self.cidade_3d.selecionar_vertice(identificador)
 
         self.lista_locais.blockSignals(True)
         for indice in range(self.lista_locais.count()):
@@ -907,16 +1069,17 @@ class JanelaPrincipal(QMainWindow):
         )
 
     def restaurar_enquadramento(self) -> None:
-        visualizacao = (
-            self.mapa_cidade
-            if self._modo_atual == "cidade"
-            else self.visualizador_grafo
-        )
+        visualizacao = {
+            "cidade": self.mapa_cidade,
+            "grafo": self.visualizador_grafo,
+            "cidade3d": self.cidade_3d,
+        }[self._modo_atual]
         visualizacao.restaurar_enquadramento()
 
     def _enquadrar_todas_as_visualizacoes(self) -> None:
         self.mapa_cidade.restaurar_enquadramento()
         self.visualizador_grafo.restaurar_enquadramento()
+        self.cidade_3d.restaurar_enquadramento()
 
     def _local_clicado_na_lista(self, item: QListWidgetItem) -> None:
         self.selecionar_vertice(item.data(Qt.ItemDataRole.UserRole))
@@ -1028,6 +1191,12 @@ class JanelaPrincipal(QMainWindow):
             arestas=arestas,
             caminho_final=passo.caminho_final,
         )
+        self.cidade_3d.destacar_passo(
+            vertice_atual=passo.vertice_atual,
+            vertices_processados=passo.vertices_processados,
+            arestas=arestas,
+            caminho_final=passo.caminho_final,
+        )
         self.painel_passos.mostrar_passo(passo, sessao.total, sessao.indice_atual)
         self.rotulo_aviso.setText(passo.descricao)
 
@@ -1053,6 +1222,7 @@ class JanelaPrincipal(QMainWindow):
         self._sessao_passos = None
         self.mapa_cidade.limpar_destaque_passo()
         self.visualizador_grafo.limpar_destaque_passo()
+        self.cidade_3d.limpar_destaque_passo()
         self.painel_passos.limpar()
         if not (preservar_resultado and sessao is not None and sessao.finalizada):
             self._limpar_estado_rota()
@@ -1098,6 +1268,7 @@ class JanelaPrincipal(QMainWindow):
                 else:
                     self.mapa_cidade.limpar_destaque_rota()
                     self.visualizador_grafo.limpar_destaque_rota()
+                    self.cidade_3d.limpar_destaque_rota()
                 if resultado.encontrada:
                     self.rotulo_aviso.setText("Rota calculada.")
                 elif resultado.clientes_inacessiveis:
@@ -1121,6 +1292,7 @@ class JanelaPrincipal(QMainWindow):
                 else:
                     self.mapa_cidade.limpar_destaque_rota()
                     self.visualizador_grafo.limpar_destaque_rota()
+                    self.cidade_3d.limpar_destaque_rota()
                 self.rotulo_aviso.setText(
                     "Caminho calculado."
                     if resultado.encontrado
@@ -1153,18 +1325,192 @@ class JanelaPrincipal(QMainWindow):
         self._limpar_estado_rota()
         self.rotulo_aviso.setText("Configure uma rota e clique em calcular.")
 
+    def _percurso_resultado_atual(self) -> tuple[str, ...]:
+        """Obtém o percurso já calculado sem executar novamente o algoritmo."""
+
+        resultado = self._resultado_atual
+        if resultado is None:
+            return ()
+        if self._algoritmo_resultado == "tsp":
+            return tuple(resultado.percurso_completo)
+        return tuple(resultado.caminho)
+
+    def _iniciar_missao_3d(self) -> None:
+        if self._calculando or self._sessao_passos is not None:
+            return
+        percurso = self._percurso_resultado_atual()
+        if not percurso:
+            self.rotulo_aviso.setText("Calcule uma rota válida antes de iniciar a missão 3D.")
+            self._atualizar_botao_missao_3d()
+            return
+        if not self.cidade_3d.modelos_3d_prontos:
+            self.rotulo_aviso.setText(
+                f"Não foi possível iniciar a missão 3D: {self.cidade_3d.status_modelos_3d}."
+            )
+            self._atualizar_botao_missao_3d()
+            return
+        # A cena 3D deve ser criada com o ancestral já visível; caso contrário
+        # o QQuickWidget recebe 0x0 durante a inicialização.
+        self.definir_modo("cidade3d")
+        QApplication.processEvents()
+        if not self.cidade_3d.entrar_missao(percurso):
+            self.rotulo_aviso.setText(
+                "Não foi possível iniciar a missão 3D: rota ou mapeamento inválido."
+            )
+            self._atualizar_botao_missao_3d()
+            return
+        self.rotulo_aviso.setText(
+            "Missão 3D pronta. Use Iniciar percurso para começar a entrega."
+        )
+        self._atualizar_botao_missao_3d()
+
+    def _voltar_da_missao_3d(self) -> None:
+        self.cidade_3d.sair_missao()
+        self.definir_modo("cidade3d")
+        self.rotulo_aviso.setText("Missão encerrada; planejamento preservado.")
+        self._atualizar_botao_missao_3d()
+
+    def _missao_3d_concluida(self) -> None:
+        self.rotulo_aviso.setText(self.cidade_3d.resumo_missao or "Missão 3D concluída.")
+        self._atualizar_botao_missao_3d()
+
+    def _atualizar_botao_missao_3d(self) -> None:
+        if not hasattr(self, "botao_iniciar_missao_3d"):
+            return
+        habilitado = (
+            bool(self._percurso_resultado_atual())
+            and not self._calculando
+            and self.cidade_3d.modelos_3d_prontos
+        )
+        self.botao_iniciar_missao_3d.setEnabled(habilitado)
+        self.botao_iniciar_missao_3d.setToolTip(
+            "Abrir a simulação 3D em terceira pessoa para a rota calculada"
+            if self.cidade_3d.modelos_3d_prontos
+            else f"Modelos 3D indisponíveis: {self.cidade_3d.status_modelos_3d}"
+        )
+        self.botao_iniciar_missao_3d.setText(
+            "Reiniciar missão 3D" if self.cidade_3d.em_missao else "Iniciar missão 3D"
+        )
+
+    def _configuracao_modelos_3d_alterada(self, configuracao) -> None:
+        """Atualiza somente a cena; nenhum algoritmo é executado novamente."""
+
+        try:
+            pronto = self.cidade_3d.configurar_modelos_3d(configuracao)
+        except (TypeError, ValueError) as erro:
+            self.rotulo_aviso.setText(f"Configuração 3D inválida: {erro}")
+            self._atualizar_botao_missao_3d()
+            return
+        if pronto:
+            self.rotulo_aviso.setText(
+                "Modelos 3D validados. A rota calculada permanece preservada."
+            )
+        else:
+            self.rotulo_aviso.setText(
+                f"Modelos 3D indisponíveis: {self.cidade_3d.status_modelos_3d}"
+            )
+        self._atualizar_botao_missao_3d()
+
+    def _visualizar_modelos_3d(self) -> None:
+        """Exibe o diagnóstico sem iniciar rota ou recalcular algoritmos."""
+
+        if self.cidade_3d.modelos_3d_prontos:
+            # O QQuickWidget só recebe o tamanho final quando o ancestral do
+            # QStackedWidget está visível. Criá-lo antes desta troca inicializa
+            # a raiz QML e o View3D em 0x0.
+            self.definir_modo("cidade3d")
+            QApplication.processEvents()
+            if self.cidade_3d.backend_glb_disponivel:
+                try:
+                    self.cidade_3d.iniciar_renderizador_glb()
+                except Exception as erro:  # pragma: no cover - backend gráfico
+                    self.rotulo_aviso.setText(f"Falha ao abrir preview GLB: {erro}")
+                    return
+            backend = (
+                "Qt Quick 3D/Panda3D disponível."
+                if self.cidade_3d.backend_glb_disponivel
+                else "Nenhum backend GLB real disponível; a simulação legada permanece disponível."
+            )
+            diagnostico = self.cidade_3d.diagnostico_renderizacao_3d
+            self.rotulo_aviso.setText(
+                f"{self.cidade_3d.info_cidade_glb.resumo} · "
+                f"{self.cidade_3d.info_carro_glb.resumo} {backend} {diagnostico}"
+            )
+        else:
+            self.rotulo_aviso.setText(
+                f"Falha nos modelos 3D: {self.cidade_3d.status_modelos_3d}"
+            )
+
+    def _enquadrar_cidade_3d(self) -> None:
+        """Reposiciona a câmera sem recalcular ou alterar a rota."""
+
+        if (
+            self.cidade_3d.renderizador_qtquick3d is None
+            and self.cidade_3d.backend_glb_disponivel
+            and self.cidade_3d.modelos_3d_prontos
+        ):
+            try:
+                self.cidade_3d.iniciar_renderizador_glb()
+            except Exception as erro:  # pragma: no cover - backend gráfico
+                self.rotulo_aviso.setText(f"Falha ao preparar o enquadramento 3D: {erro}")
+                return
+        if self.cidade_3d.enquadrar_cidade():
+            self.definir_modo("cidade3d")
+            self.rotulo_aviso.setText("Câmera enquadrada pelos limites reais da cidade importada.")
+        else:
+            self.rotulo_aviso.setText("Não foi possível enquadrar: os limites da cidade não estão disponíveis.")
+
+    def _calibrar_cidade_3d(self) -> None:
+        """Abre o editor espacial sem recalcular a rota ou alterar o grafo."""
+
+        if not self.cidade_3d.modelos_3d_prontos:
+            self.rotulo_aviso.setText(
+                f"Não foi possível calibrar: {self.cidade_3d.status_modelos_3d}"
+            )
+            return
+        self.definir_modo("cidade3d")
+        QApplication.processEvents()
+        try:
+            self.cidade_3d.iniciar_renderizador_glb()
+            self.cidade_3d.abrir_calibracao_3d()
+            self.rotulo_aviso.setText(
+                "Calibração aberta: ajuste vértices e pontos de curva sem alterar as arestas."
+            )
+        except Exception as erro:  # pragma: no cover - backend gráfico opcional
+            self.rotulo_aviso.setText(f"Falha ao abrir calibração 3D: {erro}")
+
+    def selecionar_cidade_glb(self, caminho) -> None:
+        """API programática equivalente ao botão de seleção da UI."""
+
+        self.painel_modelos_3d.selecionar_cidade(caminho)
+
+    def selecionar_carro_glb(self, caminho) -> None:
+        """API programática equivalente ao botão de seleção da UI."""
+
+        self.painel_modelos_3d.selecionar_carro(caminho)
+
+    def restaurar_modelos_3d(self) -> None:
+        self.painel_modelos_3d.restaurar_padrao()
+
     def _limpar_estado_rota(self) -> None:
         self._resultado_atual = None
         self._algoritmo_resultado = None
         if hasattr(self, "mapa_cidade"):
             self.mapa_cidade.limpar_destaque_rota()
             self.visualizador_grafo.limpar_destaque_rota()
+            if self.cidade_3d.em_missao:
+                self.cidade_3d.sair_missao()
+            self.cidade_3d.limpar_destaque_rota()
+            self._atualizar_titulo_visualizacao()
         if hasattr(self, "painel_resultados"):
             self.painel_resultados.limpar()
+        self._atualizar_botao_missao_3d()
 
     def _destacar_percurso(self, percurso: list[str]) -> None:
         self.mapa_cidade.destacar_rota(percurso)
         self.visualizador_grafo.destacar_rota(percurso)
+        self.cidade_3d.destacar_rota(percurso)
+        self._atualizar_botao_missao_3d()
 
     def _atualizar_controles_calculo(self) -> None:
         habilitado = not self._calculando and self._sessao_passos is None
@@ -1174,11 +1520,14 @@ class JanelaPrincipal(QMainWindow):
         self.lista_clientes_rota.setEnabled(habilitado)
         self.botao_calcular.setEnabled(habilitado)
         self._atualizar_modo_interface()
+        self._atualizar_botao_missao_3d()
         if hasattr(self, "painel_passos"):
             self.painel_passos.bloquear_inicio(not habilitado)
 
     def closeEvent(self, evento: QCloseEvent) -> None:  # noqa: N802 - contrato Qt
         if self._confirmar_alteracoes_pendentes():
+            if hasattr(self, "cidade_3d"):
+                self.cidade_3d.sair_missao()
             evento.accept()
         else:
             evento.ignore()

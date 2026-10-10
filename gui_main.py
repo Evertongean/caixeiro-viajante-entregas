@@ -13,7 +13,7 @@ except ModuleNotFoundError as erro:  # Mensagem amigável para a primeira execu�
     ) from erro
 
 from ui.estilos import ESTILO_APLICACAO
-from ui.janela_principal import JanelaPrincipal
+from ui.janela_principal_3d import JanelaPrincipal3D
 
 
 def main() -> int:
@@ -23,7 +23,10 @@ def main() -> int:
     aplicacao.setStyle("Fusion")
     aplicacao.setStyleSheet(ESTILO_APLICACAO)
 
-    janela = JanelaPrincipal()
+    # A aplicação entregue é exclusivamente 3D. A janela histórica continua
+    # importável para compatibilidade com projetos/testes antigos, mas não é
+    # mais exposta pelo ponto de entrada.
+    janela = JanelaPrincipal3D()
     janela.show()
     return aplicacao.exec()
 

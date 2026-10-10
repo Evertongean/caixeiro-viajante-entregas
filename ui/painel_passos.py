@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from .execucao_passos import PassoExecucao
 
@@ -53,21 +60,22 @@ class PainelPassos(QFrame):
         self.rotulo_descricao.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.rotulo_descricao, 1)
 
-        controles = QHBoxLayout()
-        controles.setSpacing(5)
+        controles = QGridLayout()
+        controles.setHorizontalSpacing(5)
+        controles.setVerticalSpacing(5)
         self.botao_primeiro = self._botao("|<", self.primeiro_solicitado.emit)
         self.botao_retroceder = self._botao("Anterior", self.retroceder_solicitado.emit)
         self.botao_avancar = self._botao("Próximo", self.avancar_solicitado.emit)
         self.botao_ultimo = self._botao(">|", self.ultimo_solicitado.emit)
         self.botao_encerrar = self._botao("Encerrar", self.encerrar_solicitado.emit)
-        for botao in (
-            self.botao_primeiro,
-            self.botao_retroceder,
-            self.botao_avancar,
-            self.botao_ultimo,
-            self.botao_encerrar,
-        ):
-            controles.addWidget(botao)
+        # Três botões na primeira linha e dois na segunda evitam que a
+        # largura mínima do painel force uma rolagem horizontal no painel
+        # direito em janelas de 800 px.
+        controles.addWidget(self.botao_primeiro, 0, 0)
+        controles.addWidget(self.botao_retroceder, 0, 1)
+        controles.addWidget(self.botao_avancar, 0, 2)
+        controles.addWidget(self.botao_ultimo, 1, 0)
+        controles.addWidget(self.botao_encerrar, 1, 1)
         layout.addLayout(controles)
 
     @staticmethod
