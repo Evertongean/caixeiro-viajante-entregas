@@ -1,0 +1,3 @@
+# O núcleo matemático usa somente a biblioteca padrão.
+# A nova interface desktop e o conversor GLB/QML são fornecidos pelo PySide6.
+PySide6>=6.8,<7
