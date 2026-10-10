@@ -11,12 +11,15 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtQuickWidgets import QQuickWidget
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
+    from models.grafo import TipoVertice
     from ui.assets_3d import ConversorBalsam
     from ui.camera_orbital import ModoCamera
     from ui.janela_principal import JanelaPrincipal
+    from models.projeto_cidade import GeometriaRua
 
     PYSIDE6_DISPONIVEL = True
 except ModuleNotFoundError:
@@ -73,10 +76,10 @@ class TestNovaInterface(unittest.TestCase):
         self.assertGreater(janela.visualizacao.width(), 500)
         self.assertGreater(janela.visualizacao.height(), 350)
 
-    def test_controles_futuros_estao_explicitamente_desabilitados(self) -> None:
+    def test_editor_aguarda_3d_rota_esta_ativa_e_missao_e_futura(self) -> None:
         janela = self.criar_janela()
         self.assertTrue(all(not botao.isEnabled() for botao in janela.botoes_edicao))
-        self.assertFalse(janela.botao_calcular.isEnabled())
+        self.assertTrue(janela.botao_calcular.isEnabled())
         self.assertFalse(janela.botao_iniciar.isEnabled())
         self.assertFalse(janela.botao_pausar.isEnabled())
         self.assertIn("Em breve", janela.botao_iniciar.text())
@@ -87,6 +90,8 @@ class TestNovaInterface(unittest.TestCase):
         janela.seletor_algoritmo.setCurrentIndex(1)
         self.assertEqual(janela.campos_algoritmo.currentIndex(), 1)
         self.assertEqual(janela.lista_clientes.count(), 3)
+        self.assertEqual(janela.botao_calcular.text(), "Calcular melhor rota")
+        self.assertIn("D — Depósito Central", janela.deposito_tsp.text())
 
     def test_cartoes_comecam_em_estado_neutro(self) -> None:
         janela = self.criar_janela()
@@ -95,6 +100,97 @@ class TestNovaInterface(unittest.TestCase):
             janela.cartao_percurso.valor.text(), "Nenhuma rota calculada"
         )
         self.assertEqual(janela.cartao_clientes.valor.text(), "0")
+
+    def test_selecao_individual_e_selecionar_todos_clientes(self) -> None:
+        janela = self.criar_janela()
+        janela.seletor_algoritmo.setCurrentIndex(1)
+        janela.lista_clientes.item(0).setCheckState(Qt.CheckState.Unchecked)
+        self.assertEqual(len(janela._clientes_selecionados()), 2)
+        self.assertIn("2 de 3", janela.quantidade_clientes.text())
+        janela.selecionar_todos_clientes.setChecked(False)
+        self.assertEqual(janela._clientes_selecionados(), [])
+        janela.selecionar_todos_clientes.setChecked(True)
+        self.assertEqual(len(janela._clientes_selecionados()), 3)
+
+    def test_calcula_dijkstra_e_atualiza_cartoes(self) -> None:
+        janela = self.criar_janela()
+        janela.origem.setCurrentIndex(janela.origem.findData("D"))
+        janela.destino.setCurrentIndex(janela.destino.findData("B"))
+        janela.botao_calcular.click()
+        self.assertEqual(
+            janela.rota_calculada.percurso_completo,
+            ("D", "X", "A", "B"),
+        )
+        self.assertEqual(janela.cartao_distancia.valor.text(), "6 km")
+        self.assertEqual(janela.cartao_percurso.valor.text(), "D → X → A → B")
+        self.assertEqual(
+            janela.cartao_clientes.valor.text(), "0 / 2 clientes atendidos"
+        )
+        self.assertIn("pendentes", janela.cartao_status.valor.text())
+
+    def test_calcula_tsp_mostrando_ordem_e_percurso_separados(self) -> None:
+        janela = self.criar_janela()
+        janela.seletor_algoritmo.setCurrentIndex(1)
+        janela.botao_calcular.click()
+        self.assertEqual(janela.cartao_distancia.valor.text(), "15 km")
+        self.assertIn("D → A → B → C → D", janela.resultado_ordem.text())
+        self.assertIn(
+            "D → X → A → B → C → D", janela.resultado_percurso.text()
+        )
+        self.assertEqual(
+            janela.cartao_clientes.valor.text(), "0 / 3 clientes atendidos"
+        )
+
+    def test_limpa_e_invalida_rota_apos_excluir_rua(self) -> None:
+        janela = self.criar_janela()
+        janela.botao_calcular.click()
+        self.assertIsNotNone(janela.rota_calculada)
+        janela.editor.selecao = ("aresta", "A", "B")
+        with patch(
+            "ui.janela_principal.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            janela._excluir_selecao()
+        self.assertIsNone(janela.rota_calculada)
+        self.assertIn("recalcular", janela.cartao_status.valor.text())
+        self.assertFalse(janela.botao_limpar_rota.isEnabled())
+
+    def test_editar_vertice_invalida_rota_anterior(self) -> None:
+        janela = self.criar_janela()
+        janela.botao_calcular.click()
+        janela.editor.selecao = ("vertice", "A")
+        with patch("ui.janela_principal.DialogoVertice") as dialogo:
+            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialogo.return_value.dados.return_value = (
+                "A",
+                "Cliente atualizado",
+                TipoVertice.CLIENTE,
+            )
+            janela._editar_selecao()
+        self.assertIsNone(janela.rota_calculada)
+        self.assertIn("recalcular", janela.cartao_status.valor.text())
+
+    def test_limpar_rota_remove_resultados_e_destaques(self) -> None:
+        janela = self.criar_janela()
+        janela.botao_calcular.click()
+        janela.botao_limpar_rota.click()
+        self.assertIsNone(janela.rota_calculada)
+        self.assertEqual(janela.cartao_distancia.valor.text(), "—")
+        self.assertEqual(
+            janela.cartao_percurso.valor.text(), "Nenhuma rota calculada"
+        )
+        self.assertEqual(janela.cartao_status.valor.text(), "Aguardando cálculo.")
+
+    def test_interface_informa_destino_inacessivel(self) -> None:
+        janela = self.criar_janela()
+        for origem, destino in (("B", "C"), ("C", "D"), ("A", "C")):
+            janela.grafo.remover_aresta(origem, destino)
+        janela.destino.setCurrentIndex(janela.destino.findData("C"))
+        janela.botao_calcular.click()
+        self.assertIsNone(janela.rota_calculada)
+        self.assertEqual(
+            janela.cartao_status.valor.text(), "Destino inacessível."
+        )
 
     def test_redimensionamento_preserva_painel_e_area_3d(self) -> None:
         janela = self.criar_janela()
@@ -115,6 +211,17 @@ class TestNovaInterface(unittest.TestCase):
                 self.assertFalse(janela.abrir_projeto(invalido))
         self.assertIs(janela.grafo, grafo_atual)
         self.assertIs(janela.projeto.grafo, grafo_atual)
+
+    def test_carregar_projeto_valido_invalida_rota_anterior(self) -> None:
+        janela = self.criar_janela()
+        janela.botao_calcular.click()
+        self.assertIsNotNone(janela.rota_calculada)
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = Path(pasta) / "projeto.json"
+            self.assertTrue(janela.salvar_projeto(caminho))
+            self.assertTrue(janela.abrir_projeto(caminho))
+        self.assertIsNone(janela.rota_calculada)
+        self.assertIn("Calcule uma nova rota", janela.cartao_status.valor.text())
 
     def test_inicializa_qml_modelos_camera_e_cache_reais(self) -> None:
         with tempfile.TemporaryDirectory() as cache:
@@ -168,6 +275,29 @@ class TestNovaInterface(unittest.TestCase):
             )
             visualizacao.camera_livre()
             self.assertEqual(visualizacao.camera.modo, ModoCamera.LIVRE)
+
+            for origem, destino in (("D", "X"), ("X", "A"), ("A", "B")):
+                inicio = janela.projeto.posicoes[origem]
+                fim = janela.projeto.posicoes[destino]
+                meio = tuple((a + b) / 2 for a, b in zip(inicio, fim))
+                chave = janela.projeto.chave_aresta(origem, destino)
+                janela.projeto.ruas[chave] = GeometriaRua(
+                    origem, destino, [meio], True
+                )
+            janela._sincronizar_cena()
+            janela.origem.setCurrentIndex(janela.origem.findData("D"))
+            janela.destino.setCurrentIndex(janela.destino.findData("B"))
+            janela.botao_calcular.click()
+            self.assertEqual(
+                len(visualizacao.rootObject().property("segmentosRota")), 6
+            )
+            self.assertGreaterEqual(
+                len(visualizacao.rootObject().property("marcadoresRota")), 2
+            )
+            janela._enquadrar_rota()
+            yaw = visualizacao.camera.yaw
+            visualizacao.orbitar(10, 0)
+            self.assertNotEqual(visualizacao.camera.yaw, yaw)
 
             backend = visualizacao.diagnostico_backend()
             if backend.casefold() == "software":

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Sequence
 
 from PySide6 import QtQuick3D  # noqa: F401 - registra os tipos QML
 from PySide6.QtCore import QTimer, QUrl, Qt, Signal
@@ -309,6 +310,33 @@ class Visualizacao3D(QQuickWidget):
         raiz = self.rootObject()
         if raiz is not None:
             raiz.setProperty("segmentosPrevia", list(segmentos))
+
+    def atualizar_destaque_rota(
+        self,
+        segmentos: list[dict[str, object]],
+        marcadores: list[dict[str, object]],
+    ) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("segmentosRota", list(segmentos))
+            raiz.setProperty("marcadoresRota", list(marcadores))
+
+    def limpar_destaque_rota(self) -> None:
+        self.atualizar_destaque_rota([], [])
+
+    def enquadrar_pontos(self, pontos: Sequence[Sequence[float]]) -> bool:
+        pontos3 = [tuple(float(valor) for valor in ponto) for ponto in pontos]
+        if not pontos3 or any(len(ponto) != 3 for ponto in pontos3):
+            return False
+        minimo = tuple(min(ponto[eixo] for ponto in pontos3) for eixo in range(3))
+        maximo = tuple(max(ponto[eixo] for ponto in pontos3) for eixo in range(3))
+        centro = tuple((minimo[eixo] + maximo[eixo]) * 0.5 for eixo in range(3))
+        dimensoes = tuple(
+            max(maximo[eixo] - minimo[eixo], 0.04) for eixo in range(3)
+        )
+        self.camera.focar(centro, dimensoes)
+        self._aplicar_camera()
+        return True
 
     def mostrar_marcador_temporario(
         self, posicao: tuple[float, float, float] | None

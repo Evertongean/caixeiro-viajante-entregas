@@ -7,6 +7,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -34,10 +36,23 @@ from models.projeto_cidade import (
     carregar_projeto_cidade,
     salvar_projeto_cidade,
 )
+from models.rota import (
+    AlgoritmoRota,
+    EstadoEspacial,
+    RotaCalculada,
+    RotaInacessivel,
+    calcular_dijkstra,
+    calcular_tsp,
+)
 
 from .assets_3d import ConversorBalsam
 from .dialogos_editor import DialogoRua, DialogoSuperficie, DialogoVertice
 from .editor_cidade import EditorCidade3D, ModoEditor
+from .apresentacao_rota import (
+    marcadores_rota_qml,
+    pontos_para_enquadrar,
+    segmentos_rota_qml,
+)
 from .tema import FOLHA_ESTILOS
 from .visualizacao_3d import Visualizacao3D
 
@@ -103,6 +118,9 @@ class JanelaPrincipal(QMainWindow):
         self.editor = EditorCidade3D(self.projeto)
         self.grafo = self.projeto.grafo
         self.caminho_projeto: Path | None = None
+        self.rota_calculada: RotaCalculada | None = None
+        self._calculando_rota = False
+        self._atualizando_campos_rota = False
 
         raiz = QWidget()
         raiz.setObjectName("raizAplicacao")
@@ -176,7 +194,7 @@ class JanelaPrincipal(QMainWindow):
         barra_layout.addWidget(titulo)
         barra_layout.addWidget(self.estado_cena)
         barra_layout.addStretch(1)
-        self.botao_enquadrar = QPushButton("Enquadrar")
+        self.botao_enquadrar = QPushButton("Enquadrar cidade")
         self.botao_aerea = QPushButton("Visão aérea")
         self.botao_focar_carro = QPushButton("Focar carro")
         for botao in (
@@ -345,8 +363,6 @@ class JanelaPrincipal(QMainWindow):
             self.origem.addItem(texto, vertice.identificador)
             self.destino.addItem(texto, vertice.identificador)
         self.destino.setCurrentIndex(self.destino.findData("B"))
-        self.origem.setEnabled(False)
-        self.destino.setEnabled(False)
         campos_dijkstra.addWidget(QLabel("Origem"))
         campos_dijkstra.addWidget(self.origem)
         campos_dijkstra.addWidget(QLabel("Destino"))
@@ -355,27 +371,73 @@ class JanelaPrincipal(QMainWindow):
         pagina_tsp = QWidget()
         campos_tsp = QVBoxLayout(pagina_tsp)
         campos_tsp.setContentsMargins(0, 0, 0, 0)
+        self.deposito_tsp = QLabel()
+        self.deposito_tsp.setObjectName("depositoTsp")
+        deposito = self.grafo.obter_deposito()
+        self.deposito_tsp.setText(
+            f"{deposito.identificador} — {deposito.nome}"
+            if deposito is not None
+            else "Nenhum depósito cadastrado"
+        )
+        campos_tsp.addWidget(QLabel("Depósito"))
+        campos_tsp.addWidget(self.deposito_tsp)
+        self.selecionar_todos_clientes = QCheckBox("Selecionar todos")
+        self.selecionar_todos_clientes.setTristate(True)
+        self.selecionar_todos_clientes.setChecked(True)
+        campos_tsp.addWidget(self.selecionar_todos_clientes)
         campos_tsp.addWidget(QLabel("Clientes"))
         self.lista_clientes = QListWidget()
-        self.lista_clientes.setMaximumHeight(92)
+        self.lista_clientes.setMaximumHeight(108)
         for cliente in self.grafo.listar_clientes():
             item = QListWidgetItem(f"{cliente.identificador} — {cliente.nome}")
+            item.setData(Qt.ItemDataRole.UserRole, cliente.identificador)
             item.setCheckState(Qt.CheckState.Checked)
             self.lista_clientes.addItem(item)
-        self.lista_clientes.setEnabled(False)
         campos_tsp.addWidget(self.lista_clientes)
+        self.quantidade_clientes = QLabel()
+        self.quantidade_clientes.setObjectName("quantidadeClientes")
+        campos_tsp.addWidget(self.quantidade_clientes)
         self.campos_algoritmo.addWidget(pagina_dijkstra)
         self.campos_algoritmo.addWidget(pagina_tsp)
         layout.addWidget(self.campos_algoritmo)
-        self.botao_calcular = self._botao_futuro("Calcular rota", "botaoPrimario")
+        self.botao_calcular = QPushButton("Calcular menor caminho")
+        self.botao_calcular.setObjectName("botaoPrimario")
         layout.addWidget(self.botao_calcular)
-        nota = QLabel("A integração matemática será ativada na próxima etapa.")
-        nota.setObjectName("notaFutura")
-        nota.setWordWrap(True)
-        layout.addWidget(nota)
+        acoes = QHBoxLayout()
+        self.botao_limpar_rota = QPushButton("Limpar rota")
+        self.botao_enquadrar_rota = QPushButton("Enquadrar rota")
+        self.botao_limpar_rota.setEnabled(False)
+        self.botao_enquadrar_rota.setEnabled(False)
+        acoes.addWidget(self.botao_limpar_rota)
+        acoes.addWidget(self.botao_enquadrar_rota)
+        layout.addLayout(acoes)
+
+        self.resultado_ordem = QLabel()
+        self.resultado_ordem.setObjectName("resultadoRota")
+        self.resultado_ordem.setWordWrap(True)
+        self.resultado_percurso = QLabel()
+        self.resultado_percurso.setObjectName("resultadoRota")
+        self.resultado_percurso.setWordWrap(True)
+        self.resultado_calibracao = QLabel("Aguardando cálculo.")
+        self.resultado_calibracao.setObjectName("notaFutura")
+        self.resultado_calibracao.setWordWrap(True)
+        layout.addWidget(self.resultado_ordem)
+        layout.addWidget(self.resultado_percurso)
+        layout.addWidget(self.resultado_calibracao)
+
         self.seletor_algoritmo.currentIndexChanged.connect(
-            self.campos_algoritmo.setCurrentIndex
+            self._algoritmo_rota_alterado
         )
+        self.origem.currentIndexChanged.connect(self._entrada_rota_alterada)
+        self.destino.currentIndexChanged.connect(self._entrada_rota_alterada)
+        self.lista_clientes.itemChanged.connect(self._clientes_alterados)
+        self.selecionar_todos_clientes.toggled.connect(
+            self._selecionar_todos_clientes
+        )
+        self.botao_calcular.clicked.connect(self._calcular_rota)
+        self.botao_limpar_rota.clicked.connect(lambda: self.limpar_rota())
+        self.botao_enquadrar_rota.clicked.connect(self._enquadrar_rota)
+        self._atualizar_resumo_clientes()
         return grupo
 
     def _grupo_missao(self) -> QGroupBox:
@@ -411,9 +473,179 @@ class JanelaPrincipal(QMainWindow):
         )
         return grupo
 
+    def _algoritmo_rota_alterado(self, indice: int) -> None:
+        self.campos_algoritmo.setCurrentIndex(indice)
+        tsp = self.seletor_algoritmo.currentData() == AlgoritmoRota.TSP.value
+        self.botao_calcular.setText(
+            "Calcular melhor rota" if tsp else "Calcular menor caminho"
+        )
+        self._entrada_rota_alterada()
+        self._atualizar_disponibilidade_calculo()
+
+    def _entrada_rota_alterada(self, *_args) -> None:
+        if self._atualizando_campos_rota:
+            return
+        if self.rota_calculada is not None:
+            self.limpar_rota(status="Parâmetros alterados. Calcule novamente.")
+
+    def _clientes_selecionados(self) -> list[str]:
+        return [
+            str(self.lista_clientes.item(indice).data(Qt.ItemDataRole.UserRole))
+            for indice in range(self.lista_clientes.count())
+            if self.lista_clientes.item(indice).checkState()
+            == Qt.CheckState.Checked
+        ]
+
+    def _selecionar_todos_clientes(self, marcado: bool) -> None:
+        if self._atualizando_campos_rota:
+            return
+        self._atualizando_campos_rota = True
+        estado = Qt.CheckState.Checked if marcado else Qt.CheckState.Unchecked
+        for indice in range(self.lista_clientes.count()):
+            self.lista_clientes.item(indice).setCheckState(estado)
+        self._atualizando_campos_rota = False
+        self._atualizar_resumo_clientes()
+        self._entrada_rota_alterada()
+
+    def _clientes_alterados(self, _item: QListWidgetItem) -> None:
+        if self._atualizando_campos_rota:
+            return
+        self._atualizar_resumo_clientes()
+        self._entrada_rota_alterada()
+
+    def _atualizar_resumo_clientes(self) -> None:
+        total = self.lista_clientes.count()
+        selecionados = len(self._clientes_selecionados())
+        self.quantidade_clientes.setText(
+            f"{selecionados} de {total} clientes selecionados"
+        )
+        self._atualizando_campos_rota = True
+        if selecionados == total:
+            estado = Qt.CheckState.Checked
+        elif selecionados == 0:
+            estado = Qt.CheckState.Unchecked
+        else:
+            estado = Qt.CheckState.PartiallyChecked
+        self.selecionar_todos_clientes.setCheckState(estado)
+        self._atualizando_campos_rota = False
+
+    def _calcular_rota(self) -> None:
+        if self._calculando_rota:
+            return
+        self._calculando_rota = True
+        self.botao_calcular.setEnabled(False)
+        self.cartao_status.definir("Calculando rota…")
+        QApplication.processEvents()
+        try:
+            algoritmo = self.seletor_algoritmo.currentData()
+            if algoritmo == AlgoritmoRota.DIJKSTRA.value:
+                origem, destino = self.origem.currentData(), self.destino.currentData()
+                if origem is None or destino is None:
+                    raise ValueError("Selecione uma origem e um destino válidos.")
+                rota = calcular_dijkstra(self.projeto, str(origem), str(destino))
+            elif algoritmo == AlgoritmoRota.TSP.value:
+                rota = calcular_tsp(self.projeto, self._clientes_selecionados())
+            else:
+                raise ValueError("Selecione um algoritmo de rota válido.")
+        except (KeyError, TypeError, ValueError) as erro:
+            self.rota_calculada = None
+            self.visualizacao.limpar_destaque_rota()
+            self.cartao_distancia.definir("—")
+            self.cartao_percurso.definir("Nenhuma rota disponível")
+            self.cartao_clientes.definir("0 / 0 clientes atendidos")
+            self.resultado_ordem.setText("")
+            self.resultado_percurso.setText("")
+            self.resultado_calibracao.setText(str(erro))
+            status = (
+                "Destino inacessível."
+                if isinstance(erro, RotaInacessivel)
+                else f"Não foi possível calcular: {erro}"
+            )
+            self.cartao_status.definir(status)
+            self.botao_limpar_rota.setEnabled(False)
+            self.botao_enquadrar_rota.setEnabled(False)
+        else:
+            self._apresentar_rota(rota)
+        finally:
+            self._calculando_rota = False
+            self._atualizar_disponibilidade_calculo()
+
+    def _apresentar_rota(self, rota: RotaCalculada) -> None:
+        self.rota_calculada = rota
+        percurso = " → ".join(rota.percurso_completo)
+        self.cartao_distancia.definir(f"{rota.distancia_total:g} km")
+        self.cartao_percurso.definir(percurso)
+        quantidade = len(rota.clientes_selecionados)
+        self.cartao_clientes.definir(f"0 / {quantidade} clientes atendidos")
+        if rota.ordem_atendimento:
+            ordem = " → ".join(rota.ordem_atendimento)
+            self.resultado_ordem.setText(f"Ordem de atendimento: {ordem}")
+        else:
+            self.resultado_ordem.setText("")
+        self.resultado_percurso.setText(f"Percurso completo: {percurso}")
+        if rota.estado_espacial is EstadoEspacial.COMPLETO:
+            self.resultado_calibracao.setText(
+                "Todos os trechos possuem traçado espacial confirmado manualmente."
+            )
+            self.cartao_status.definir("Rota pronta para futura missão.")
+        else:
+            pendentes = ", ".join(
+                f"{origem}↔{destino}"
+                for origem, destino in rota.arestas_pendentes
+            )
+            self.resultado_calibracao.setText(
+                f"Trechos pendentes de calibração espacial: {pendentes}."
+            )
+            self.cartao_status.definir(
+                "Rota calculada, mas com ruas pendentes de calibração."
+            )
+        self.visualizacao.atualizar_destaque_rota(
+            segmentos_rota_qml(rota),
+            marcadores_rota_qml(rota, self.projeto),
+        )
+        self.botao_limpar_rota.setEnabled(True)
+        self.botao_enquadrar_rota.setEnabled(
+            bool(pontos_para_enquadrar(rota, self.projeto))
+        )
+
+    def limpar_rota(self, *, status: str = "Aguardando cálculo.") -> None:
+        self.rota_calculada = None
+        self.visualizacao.limpar_destaque_rota()
+        self.cartao_distancia.definir("—")
+        self.cartao_percurso.definir("Nenhuma rota calculada")
+        self.cartao_clientes.definir("0 / 0 clientes atendidos")
+        self.cartao_status.definir(status)
+        self.resultado_ordem.setText("")
+        self.resultado_percurso.setText("")
+        self.resultado_calibracao.setText(status)
+        self.botao_limpar_rota.setEnabled(False)
+        self.botao_enquadrar_rota.setEnabled(False)
+
+    def _invalidar_rota_por_edicao(self) -> None:
+        if self.rota_calculada is not None:
+            self.limpar_rota(
+                status="Cidade alterada. É necessário recalcular a rota."
+            )
+
+    def _enquadrar_rota(self) -> None:
+        if self.rota_calculada is None:
+            return
+        pontos = pontos_para_enquadrar(self.rota_calculada, self.projeto)
+        if not self.visualizacao.enquadrar_pontos(pontos):
+            self.cartao_status.definir(
+                "A rota não possui posições espaciais para enquadramento."
+            )
+
+    def _atualizar_disponibilidade_calculo(self) -> None:
+        algoritmo = self.seletor_algoritmo.currentData()
+        if algoritmo == AlgoritmoRota.DIJKSTRA.value:
+            disponivel = self.origem.count() > 0 and self.destino.count() > 0
+        else:
+            disponivel = self.grafo.obter_deposito() is not None
+        self.botao_calcular.setEnabled(disponivel and not self._calculando_rota)
+
     def _definir_instrucao(self, texto: str) -> None:
         self.instrucao_editor.setText(texto)
-        self.cartao_status.definir(texto)
 
     def _modo_navegar(self) -> None:
         self.editor.definir_modo(ModoEditor.NAVEGAR)
@@ -487,11 +719,22 @@ class JanelaPrincipal(QMainWindow):
         self.visualizacao.atualizar_previa_rua(
             self.editor.segmentos_previa_qml()
         )
+        if self.rota_calculada is not None:
+            self.visualizacao.atualizar_destaque_rota(
+                segmentos_rota_qml(self.rota_calculada),
+                marcadores_rota_qml(self.rota_calculada, self.projeto),
+            )
         self._atualizar_campos_grafo()
 
     def _atualizar_campos_grafo(self) -> None:
+        clientes_anteriores = {
+            str(self.lista_clientes.item(indice).data(Qt.ItemDataRole.UserRole))
+            for indice in range(self.lista_clientes.count())
+        }
+        clientes_selecionados = set(self._clientes_selecionados())
         origem_atual = self.origem.currentData() if self.origem.count() else None
         destino_atual = self.destino.currentData() if self.destino.count() else None
+        self._atualizando_campos_rota = True
         self.origem.clear()
         self.destino.clear()
         for vertice in self.grafo.listar_vertices():
@@ -505,8 +748,26 @@ class JanelaPrincipal(QMainWindow):
         self.lista_clientes.clear()
         for cliente in self.grafo.listar_clientes():
             item = QListWidgetItem(f"{cliente.identificador} — {cliente.nome}")
-            item.setCheckState(Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, cliente.identificador)
+            selecionado = (
+                cliente.identificador in clientes_selecionados
+                or cliente.identificador not in clientes_anteriores
+            )
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if selecionado
+                else Qt.CheckState.Unchecked
+            )
             self.lista_clientes.addItem(item)
+        deposito = self.grafo.obter_deposito()
+        self.deposito_tsp.setText(
+            f"{deposito.identificador} — {deposito.nome}"
+            if deposito is not None
+            else "Nenhum depósito cadastrado"
+        )
+        self._atualizando_campos_rota = False
+        self._atualizar_resumo_clientes()
+        self._atualizar_disponibilidade_calculo()
 
     def _processar_pick(
         self,
@@ -629,6 +890,7 @@ class JanelaPrincipal(QMainWindow):
             except (TypeError, ValueError, KeyError) as erro:
                 self._mostrar_erro(str(erro))
                 return
+            self._invalidar_rota_por_edicao()
             self._sincronizar_cena()
             self._modo_navegar()
             self._definir_instrucao(f"Ponto {identificador} reposicionado.")
@@ -707,6 +969,7 @@ class JanelaPrincipal(QMainWindow):
             return None
         finally:
             self.visualizacao.mostrar_marcador_temporario(None)
+        self._invalidar_rota_por_edicao()
         self._sincronizar_cena()
         self._definir_instrucao(
             f"Ponto {identificador} criado e associado ao grafo oficial."
@@ -743,6 +1006,7 @@ class JanelaPrincipal(QMainWindow):
         except (TypeError, ValueError, KeyError) as erro:
             self._mostrar_erro(str(erro))
             return
+        self._invalidar_rota_por_edicao()
         self._sincronizar_cena()
         self._modo_navegar()
         self._definir_instrucao("Rua criada com sucesso.")
@@ -779,6 +1043,7 @@ class JanelaPrincipal(QMainWindow):
             except (TypeError, ValueError, KeyError) as erro:
                 self._mostrar_erro(str(erro))
                 return
+            self._invalidar_rota_por_edicao()
             self._sincronizar_cena()
             self._definir_instrucao(f"Ponto {identificador} atualizado.")
             return
@@ -830,6 +1095,7 @@ class JanelaPrincipal(QMainWindow):
             self._mostrar_erro(str(erro))
             return
         self.editor.selecao = None
+        self._invalidar_rota_por_edicao()
         self._sincronizar_cena()
         self._atualizar_botoes_selecao()
         self._definir_instrucao("Item excluído com sucesso.")
@@ -873,6 +1139,10 @@ class JanelaPrincipal(QMainWindow):
         self.grafo = carregado.grafo
         self.editor = EditorCidade3D(carregado)
         self.caminho_projeto = Path(caminho)
+        self.limpar_rota(status="Projeto carregado. Calcule uma nova rota.")
+        self._atualizando_campos_rota = True
+        self.lista_clientes.clear()
+        self._atualizando_campos_rota = False
         self._inicializar_posicoes_legadas()
         self._sincronizar_cena()
         self._modo_navegar()
@@ -892,6 +1162,7 @@ class JanelaPrincipal(QMainWindow):
     def _mostrar_erro(self, mensagem: str) -> None:
         QMessageBox.warning(self, "Delivery Route", mensagem)
         self._definir_instrucao(mensagem)
+        self.cartao_status.definir(mensagem)
 
     def _criar_cartoes(self) -> QHBoxLayout:
         layout = QHBoxLayout()
@@ -932,7 +1203,8 @@ class JanelaPrincipal(QMainWindow):
         elif "Inicializando" in mensagem:
             resumo = "Inicializando 3D…"
         self.estado_cena.setText(resumo)
-        self.cartao_status.definir(resumo)
+        if not self._editor_inicializado:
+            self.cartao_status.definir(resumo)
         pronto = ok and (
             self.visualizacao.modelos_preparados
             or "Modelos preparados" in mensagem
@@ -954,6 +1226,8 @@ class JanelaPrincipal(QMainWindow):
                 self._inicializar_posicoes_legadas()
                 self._sincronizar_cena()
                 self._modo_navegar()
+                if self.rota_calculada is None:
+                    self.limpar_rota()
 
     def _camera_alterada(self, modo: str) -> None:
         nomes = {

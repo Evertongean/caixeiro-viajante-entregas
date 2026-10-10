@@ -143,6 +143,32 @@ QComboBox, QListWidget {
     padding: 0 9px;
     selection-background-color: #2388FF;
 }
+QCheckBox {
+    color: #C5D8EE;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 17px;
+    height: 17px;
+    border: 1px solid #3C6B93;
+    border-radius: 4px;
+    background: #0A1727;
+}
+QCheckBox::indicator:checked {
+    background: #2388FF;
+    border-color: #58A7FF;
+}
+QCheckBox::indicator:indeterminate {
+    background: #F59E0B;
+    border-color: #FFB52D;
+}
+QLabel#depositoTsp, QLabel#quantidadeClientes, QLabel#resultadoRota {
+    color: #C5D8EE;
+    background: #0A1727;
+    border: 1px solid #29445F;
+    border-radius: 7px;
+    padding: 6px 8px;
+}
 QComboBox:disabled, QListWidget:disabled {
     color: #687B91;
     background: #101B29;

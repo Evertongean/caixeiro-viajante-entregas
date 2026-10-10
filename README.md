@@ -6,8 +6,9 @@ Viajante (TSP) e visualizar o cenário em uma aplicação desktop 3D.
 
 A interface apresenta os modelos fornecidos em `assets/models/cidade.glb` e
 `assets/models/carro.glb`, navegação de câmera e um editor que cadastra pontos
-e ruas diretamente sobre a geometria 3D. O cálculo visual de rotas e a missão
-animada permanecem reservados para as próximas etapas.
+e ruas diretamente sobre a geometria 3D. Dijkstra e TSP podem ser executados
+no grafo editado e seus percursos espaciais são destacados na cidade. A missão
+animada permanece reservada para a próxima etapa.
 
 ## Requisitos
 
@@ -48,8 +49,10 @@ python3 main.py
 ├── models/
 │   ├── grafo.py
 │   ├── persistencia.py
-│   └── projeto_cidade.py     # grafo e metadados espaciais versionados
+│   ├── projeto_cidade.py     # grafo e metadados espaciais versionados
+│   └── rota.py               # resultado matemático e validação espacial
 ├── ui/
+│   ├── apresentacao_rota.py  # segmentos e marcadores declarativos da rota
 │   ├── assets_3d.py          # valida GLB e gerencia o cache Balsam
 │   ├── camera_orbital.py     # estado matemático da câmera
 │   ├── cena_3d.qml           # cena Qt Quick 3D única
@@ -74,9 +77,9 @@ A janela possui três regiões:
 - painel de controles rolável à direita;
 - quatro cartões inferiores para distância, percurso, clientes e status.
 
-Os controles da câmera, do enquadramento e da seção **Editar cidade** são
-funcionais. O cálculo visual e a missão aparecem explicitamente desabilitados
-como “Em breve”; nenhum botão simula uma operação inexistente.
+Os controles da câmera, do enquadramento, da seção **Editar cidade** e do
+cálculo de rotas são funcionais. Somente a missão animada permanece
+explicitamente desabilitada como “Em breve”.
 
 ### Editor visual
 
@@ -106,6 +109,31 @@ Ao confirmar uma rua, o diálogo mostra o comprimento geométrico, o fator
 configurável em km/unidade e a sugestão resultante. O peso oficial continua
 sendo um campo separado, validado pelo grafo e usado por Dijkstra e TSP.
 
+### Calcular rota
+
+Em **Dijkstra — menor caminho**, escolha qualquer origem e destino do grafo e
+pressione **Calcular menor caminho**. Em **Caixeiro Viajante — TSP**, confira o
+depósito, marque individualmente até oito clientes ou use **Selecionar todos**
+e pressione **Calcular melhor rota**.
+
+A interface chama diretamente os algoritmos de `algorithms/`; ela não contém
+uma segunda implementação matemática. No TSP, a ordem de atendimento e o
+percurso completo pelas ruas são apresentados separadamente. Os cartões
+inferiores exibem peso total, percurso, quantidade prevista de clientes e o
+estado real do cálculo.
+
+O destaque ciano segue cada polilinha e seus pontos intermediários. Geometrias
+existentes que ainda não foram confirmadas aparecem em laranja. Quando uma
+aresta da rota não possui geometria espacial, o resultado matemático continua
+disponível, mas esse trecho não é substituído por uma reta fictícia; ele é
+listado como pendente de calibração. “Confirmado manualmente” não significa
+que o programa comprovou automaticamente a ausência de obstáculos.
+
+**Limpar rota** remove somente o resultado e seus destaques. **Enquadrar rota**
+ajusta a câmera aos pontos espaciais disponíveis sem alterar modelo, grafo ou
+pesos. Qualquer edição de vértice/rua ou carregamento de outro projeto invalida
+o resultado anterior e exige novo cálculo.
+
 ### Câmera
 
 - botão esquerdo + arrastar: órbita;
@@ -114,6 +142,7 @@ sendo um campo separado, validado pelo grafo e usado por Dijkstra e TSP.
 - **Enquadrar**: restaura a vista calculada pela caixa real da cidade;
 - **Visão aérea**: muda somente a câmera;
 - **Focar carro**: enquadra o veículo;
+- **Enquadrar rota**: centraliza o percurso espacial calculado;
 - **Câmera livre** e **Atrás do carro**: alternam a estrutura preparada para a
   futura missão.
 
@@ -174,12 +203,14 @@ python3 -m compileall -q algorithms models ui main.py gui_main.py tests
 
 A suíte cobre o núcleo matemático, os formatos novo e legado, classificação de
 superfícies, criação/edição/exclusão de vértices e ruas, coordenadas, curvas,
-pesos, consistência visual, ponte de picking, execução de Dijkstra/TSP após
-edições, inspeção dos GLBs, câmera e inicialização QML.
+pesos, consistência visual, ponte de picking, seleção e execução de
+Dijkstra/TSP, ordem de atendimento, percurso completo, trechos pendentes,
+invalidação, cartões, destaques espaciais, inspeção dos GLBs, câmera e
+inicialização QML.
 
 O backend `offscreen` valida a estrutura sem oferecer uma API 3D real. A
 validação desta versão também foi executada com OpenGL: cidade e carro foram
-materializados e `View3D.pick()` retornou impactos reais com posição, nome da
-malha e material. Como a distinção semântica do asset não é confiável, a
-classificação rua/calçada/bloqueio continua sendo uma verificação manual
-obrigatória do usuário.
+materializados, e dez objetos luminosos correspondentes às curvas do percurso
+TSP de demonstração foram efetivamente instanciados e capturados na cena. Como
+a distinção semântica do asset não é confiável, a classificação de superfícies
+e a confirmação dos traçados continuam sendo verificações manuais obrigatórias.

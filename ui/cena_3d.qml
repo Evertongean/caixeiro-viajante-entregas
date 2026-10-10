@@ -37,6 +37,8 @@ Item {
     property var marcadores: []
     property var segmentosRuas: []
     property var segmentosPrevia: []
+    property var segmentosRota: []
+    property var marcadoresRota: []
     property bool marcadorTemporarioVisivel: false
     property vector3d marcadorTemporarioPosicao: Qt.vector3d(0, 0, 0)
 
@@ -237,6 +239,31 @@ Item {
         }
 
         Repeater3D {
+            model: raiz.segmentosRota
+            delegate: Model {
+                id: segmentoRota
+                required property var modelData
+                objectName: "destaque-rota"
+                source: "#Cube"
+                pickable: false
+                position: raiz.centroSegmento(modelData)
+                eulerRotation: raiz.rotacaoSegmento(modelData)
+                scale: Qt.vector3d(
+                    0.00018,
+                    0.00018,
+                    raiz.comprimentoSegmento(modelData) / 100
+                )
+                materials: PrincipledMaterial {
+                    baseColor: segmentoRota.modelData.cor
+                    emissiveFactor: segmentoRota.modelData.confirmado
+                        ? Qt.vector3d(0.18, 0.72, 0.95)
+                        : Qt.vector3d(0.78, 0.30, 0.03)
+                    roughness: 0.18
+                }
+            }
+        }
+
+        Repeater3D {
             model: raiz.marcadores
             delegate: Model {
                 id: marcador3D
@@ -252,6 +279,26 @@ Item {
                     baseColor: marcador3D.modelData.cor
                     emissiveFactor: Qt.vector3d(0.16, 0.16, 0.16)
                     roughness: 0.24
+                }
+            }
+        }
+
+        Repeater3D {
+            model: raiz.marcadoresRota
+            delegate: Model {
+                id: marcadorRota3D
+                required property var modelData
+                objectName: "marcador-rota:" + modelData.id
+                source: "#Sphere"
+                pickable: false
+                position: Qt.vector3d(
+                    modelData.x, modelData.y + 0.048, modelData.z
+                )
+                scale: Qt.vector3d(0.00062, 0.00062, 0.00062)
+                materials: PrincipledMaterial {
+                    baseColor: marcadorRota3D.modelData.cor
+                    emissiveFactor: Qt.vector3d(0.35, 0.55, 0.60)
+                    roughness: 0.16
                 }
             }
         }
@@ -302,6 +349,36 @@ Item {
                 font.weight: Font.DemiBold
                 text: etiquetaMarcador.modelData.id + " · "
                       + etiquetaMarcador.modelData.nome
+            }
+        }
+    }
+
+    Repeater {
+        model: raiz.marcadoresRota
+        delegate: Rectangle {
+            id: etiquetaRota
+            required property var modelData
+            property vector3d projetado: visualizacao.mapFrom3DScene(
+                Qt.vector3d(modelData.x, modelData.y + 0.145, modelData.z)
+            )
+            x: projetado.x - width / 2 + raiz.cameraYaw * 0
+            y: projetado.y - height + raiz.cameraPitch * 0
+            z: 24
+            visible: projetado.z > 0
+            width: textoRota.implicitWidth + 18
+            height: 23
+            radius: 8
+            color: "#EE07111F"
+            border.color: modelData.cor
+            border.width: 2
+
+            Text {
+                id: textoRota
+                anchors.centerIn: parent
+                color: "#F4F8FF"
+                font.pixelSize: 9
+                font.weight: Font.Bold
+                text: etiquetaRota.modelData.texto
             }
         }
     }
