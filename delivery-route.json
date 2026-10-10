@@ -1,0 +1,597 @@
+{
+  "formato": "delivery-route-cidade-3d",
+  "versao": 1,
+  "modelos": {
+    "cidade": "assets/models/cidade.glb",
+    "carro": "assets/models/carro.glb"
+  },
+  "grafo": {
+    "formato": "delivery-route-grafo",
+    "versao": 1,
+    "deposito": "D1",
+    "vertices": [
+      {
+        "identificador": "A",
+        "nome": "Cliente A",
+        "tipo": "cliente",
+        "x": 3,
+        "y": 0
+      },
+      {
+        "identificador": "B",
+        "nome": "Cliente B",
+        "tipo": "cliente",
+        "x": 5,
+        "y": 2
+      },
+      {
+        "identificador": "D1",
+        "nome": "deposito",
+        "tipo": "depósito",
+        "x": 0.22278954088687897,
+        "y": 1.207472801208496
+      },
+      {
+        "identificador": "X1",
+        "nome": "c1",
+        "tipo": "cruzamento",
+        "x": 0.4277985692024231,
+        "y": 1.1579108238220215
+      },
+      {
+        "identificador": "X2",
+        "nome": "c2",
+        "tipo": "cruzamento",
+        "x": 0.42966824769973755,
+        "y": 1.550113320350647
+      },
+      {
+        "identificador": "X3",
+        "nome": "c3",
+        "tipo": "cruzamento",
+        "x": 0.0030784481205046177,
+        "y": 1.555136799812317
+      },
+      {
+        "identificador": "X4",
+        "nome": "c4",
+        "tipo": "cruzamento",
+        "x": -0.879119336605072,
+        "y": 1.5491565465927124
+      },
+      {
+        "identificador": "X5",
+        "nome": "c5",
+        "tipo": "cruzamento",
+        "x": -1.4490584135055542,
+        "y": 1.5325554609298706
+      },
+      {
+        "identificador": "X6",
+        "nome": "c6",
+        "tipo": "cruzamento",
+        "x": -1.4650733470916748,
+        "y": 0.8080371022224426
+      },
+      {
+        "identificador": "X7",
+        "nome": "c7",
+        "tipo": "cruzamento",
+        "x": -0.8764437437057495,
+        "y": 0.7976067662239075
+      },
+      {
+        "identificador": "X8",
+        "nome": "c8",
+        "tipo": "cruzamento",
+        "x": -0.028091734275221825,
+        "y": 0.7972487211227417
+      },
+      {
+        "identificador": "X9",
+        "nome": "c9",
+        "tipo": "cruzamento",
+        "x": -0.0022745789028704166,
+        "y": 1.1676114797592163
+      },
+      {
+        "identificador": "C1",
+        "nome": "cliente 1",
+        "tipo": "cliente",
+        "x": -1.056433916091919,
+        "y": -0.0004659891128540039
+      },
+      {
+        "identificador": "X10",
+        "nome": "c10",
+        "tipo": "cruzamento",
+        "x": -1.0961627960205078,
+        "y": 0.06674585491418839
+      },
+      {
+        "identificador": "X12",
+        "nome": "c12",
+        "tipo": "cruzamento",
+        "x": -0.02778671123087406,
+        "y": 0.07143384963274002
+      },
+      {
+        "identificador": "X13",
+        "nome": "c13",
+        "tipo": "cruzamento",
+        "x": -0.013346955180168152,
+        "y": 0.4639509618282318
+      },
+      {
+        "identificador": "X14",
+        "nome": "c14",
+        "tipo": "cruzamento",
+        "x": 0.4350813925266266,
+        "y": 0.4622816741466522
+      },
+      {
+        "identificador": "X15",
+        "nome": "c15",
+        "tipo": "cruzamento",
+        "x": 0.43818289041519165,
+        "y": 0.08657528460025787
+      },
+      {
+        "identificador": "X11",
+        "nome": "c11",
+        "tipo": "cruzamento",
+        "x": -0.8862819075584412,
+        "y": 0.0600438266992569
+      },
+      {
+        "identificador": "X16",
+        "nome": "c16",
+        "tipo": "cruzamento",
+        "x": -0.28234919905662537,
+        "y": 0.05692576617002487
+      },
+      {
+        "identificador": "X17",
+        "nome": "c17",
+        "tipo": "cruzamento",
+        "x": -0.2623879611492157,
+        "y": -0.3114388883113861
+      },
+      {
+        "identificador": "X18",
+        "nome": "c18",
+        "tipo": "cruzamento",
+        "x": -1.463168740272522,
+        "y": 0.053105033934116364
+      }
+    ],
+    "arestas": [
+      {
+        "origem": "A",
+        "destino": "B",
+        "peso": 3.0
+      },
+      {
+        "origem": "B",
+        "destino": "X13",
+        "peso": 0.20574
+      },
+      {
+        "origem": "B",
+        "destino": "X14",
+        "peso": 0.244593
+      },
+      {
+        "origem": "D1",
+        "destino": "X1",
+        "peso": 0.210915
+      },
+      {
+        "origem": "D1",
+        "destino": "X9",
+        "peso": 0.228567
+      },
+      {
+        "origem": "X1",
+        "destino": "X2",
+        "peso": 0.392207
+      },
+      {
+        "origem": "X1",
+        "destino": "X14",
+        "peso": 0.695667
+      },
+      {
+        "origem": "X2",
+        "destino": "X3",
+        "peso": 0.426619
+      },
+      {
+        "origem": "X3",
+        "destino": "X4",
+        "peso": 0.882218
+      },
+      {
+        "origem": "X3",
+        "destino": "X9",
+        "peso": 0.387562
+      },
+      {
+        "origem": "X4",
+        "destino": "X5",
+        "peso": 0.570181
+      },
+      {
+        "origem": "X4",
+        "destino": "X7",
+        "peso": 0.751555
+      },
+      {
+        "origem": "X5",
+        "destino": "X6",
+        "peso": 0.724695
+      },
+      {
+        "origem": "X6",
+        "destino": "X7",
+        "peso": 0.588722
+      },
+      {
+        "origem": "X6",
+        "destino": "X18",
+        "peso": 0.754934
+      },
+      {
+        "origem": "X7",
+        "destino": "X8",
+        "peso": 0.848352
+      },
+      {
+        "origem": "X7",
+        "destino": "X11",
+        "peso": 0.737629
+      },
+      {
+        "origem": "X8",
+        "destino": "X9",
+        "peso": 0.371261
+      },
+      {
+        "origem": "X8",
+        "destino": "X13",
+        "peso": 0.333624
+      },
+      {
+        "origem": "C1",
+        "destino": "X10",
+        "peso": 0.093242
+      },
+      {
+        "origem": "X10",
+        "destino": "X18",
+        "peso": 0.367259
+      },
+      {
+        "origem": "X10",
+        "destino": "X11",
+        "peso": 0.209988
+      },
+      {
+        "origem": "X12",
+        "destino": "X13",
+        "peso": 0.392783
+      },
+      {
+        "origem": "X12",
+        "destino": "X15",
+        "peso": 0.466216
+      },
+      {
+        "origem": "X12",
+        "destino": "X16",
+        "peso": 0.254976
+      },
+      {
+        "origem": "X14",
+        "destino": "X15",
+        "peso": 0.375719
+      },
+      {
+        "origem": "X11",
+        "destino": "X16",
+        "peso": 0.603941
+      },
+      {
+        "origem": "X16",
+        "destino": "X17",
+        "peso": 0.368905
+      }
+    ]
+  },
+  "editor_3d": {
+    "posicoes": {
+      "A": [
+        -0.37493644327967346,
+        0.0002882787718708979,
+        -0.3027142632533401
+      ],
+      "B": [
+        0.19143150695164102,
+        0.0002882787718708979,
+        0.4827254530774326
+      ],
+      "C1": [
+        -1.056433916091919,
+        0.04474591091275215,
+        -0.0004659891128540039
+      ],
+      "D1": [
+        0.22278954088687897,
+        -0.006227046251296997,
+        1.207472801208496
+      ],
+      "X1": [
+        0.4277985692024231,
+        -0.006227046251296997,
+        1.1579108238220215
+      ],
+      "X10": [
+        -1.0961627960205078,
+        -0.006227046251296997,
+        0.06674585491418839
+      ],
+      "X11": [
+        -0.8862819075584412,
+        -0.006227046251296997,
+        0.0600438266992569
+      ],
+      "X12": [
+        -0.02778671123087406,
+        -0.00622704578563571,
+        0.07143384963274002
+      ],
+      "X13": [
+        -0.013346955180168152,
+        -0.00622704578563571,
+        0.4639509618282318
+      ],
+      "X14": [
+        0.4350813925266266,
+        -0.0062270453199744225,
+        0.4622816741466522
+      ],
+      "X15": [
+        0.43818289041519165,
+        -0.0062270453199744225,
+        0.08657528460025787
+      ],
+      "X16": [
+        -0.28234919905662537,
+        -0.00622704578563571,
+        0.05692576617002487
+      ],
+      "X17": [
+        -0.2623879611492157,
+        -0.00622704578563571,
+        -0.3114388883113861
+      ],
+      "X18": [
+        -1.463168740272522,
+        -0.0062270453199744225,
+        0.053105033934116364
+      ],
+      "X2": [
+        0.42966824769973755,
+        -0.00622704578563571,
+        1.550113320350647
+      ],
+      "X3": [
+        0.0030784481205046177,
+        -0.0062270453199744225,
+        1.555136799812317
+      ],
+      "X4": [
+        -0.879119336605072,
+        -0.00622704578563571,
+        1.5491565465927124
+      ],
+      "X5": [
+        -1.4490584135055542,
+        -0.006227046251296997,
+        1.5325554609298706
+      ],
+      "X6": [
+        -1.4650733470916748,
+        -0.00622704578563571,
+        0.8080371022224426
+      ],
+      "X7": [
+        -0.8764437437057495,
+        -0.006227046251296997,
+        0.7976067662239075
+      ],
+      "X8": [
+        -0.028091734275221825,
+        -0.00622704578563571,
+        0.7972487211227417
+      ],
+      "X9": [
+        -0.0022745789028704166,
+        -0.00622704578563571,
+        1.1676114797592163
+      ]
+    },
+    "ruas": [
+      {
+        "origem": "B",
+        "destino": "X13",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X14",
+        "destino": "B",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X10",
+        "destino": "C1",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X1",
+        "destino": "D1",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "D1",
+        "destino": "X9",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X14",
+        "destino": "X1",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X1",
+        "destino": "X2",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X10",
+        "destino": "X11",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X10",
+        "destino": "X18",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X16",
+        "destino": "X11",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X11",
+        "destino": "X7",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X12",
+        "destino": "X13",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X12",
+        "destino": "X15",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X16",
+        "destino": "X12",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X13",
+        "destino": "X8",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X14",
+        "destino": "X15",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X17",
+        "destino": "X16",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X6",
+        "destino": "X18",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X3",
+        "destino": "X2",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X3",
+        "destino": "X4",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X9",
+        "destino": "X3",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X4",
+        "destino": "X5",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X7",
+        "destino": "X4",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X5",
+        "destino": "X6",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X7",
+        "destino": "X6",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X7",
+        "destino": "X8",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X8",
+        "destino": "X9",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      }
+    ],
+    "superficies": {
+      "Cube.016_white_0|white": "bloqueada",
+      "Cube.017_keremi_0|keremi": "rua",
+      "Cube.017_light brown_0|light_brown": "bloqueada",
+      "wh_plane_0|plane": "rua",
+      "wh_white.001_0|white.001": "calcada"
+    },
+    "fator_km_por_unidade": 1.0
+  }
+}
