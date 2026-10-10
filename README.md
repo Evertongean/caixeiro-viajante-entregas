@@ -114,6 +114,14 @@ isso nenhuma malha é considerada trafegável automaticamente:
 5. para uma conexão, ative **Criar rua**, selecione os dois marcadores,
    acrescente curvas clicando no asfalto e confirme o peso oficial.
 
+A classificação é persistida pela referência `objeto|material` devolvida pelo
+picking da malha importada (por exemplo, `wh_plane_0|plane`). Essa referência é
+estável enquanto o mesmo `cidade.glb` e sua conversão forem mantidos, mas não é
+uma identificação semântica: trocar ou reeditar o GLB pode alterar nomes de
+malhas e materiais. O picking distingue descendentes da cidade, do carro e dos
+elementos do editor, impedindo que carro, marcadores ou linhas sejam salvos
+como superfícies trafegáveis.
+
 O botão **Desfazer** remove primeiro a última curva e depois os extremos; o
 botão **Cancelar** descarta toda a prévia. Em **Navegar**, marcadores e linhas
 podem ser selecionados para edição, reposicionamento ou exclusão. Exclusões

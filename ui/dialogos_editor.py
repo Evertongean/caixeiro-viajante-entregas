@@ -44,10 +44,10 @@ class DialogoVertice(QDialog):
         self.nome = QLineEdit(vertice.nome if vertice else "")
         self.tipo = QComboBox()
         for item in TipoVertice:
-            self.tipo.addItem(item.value.capitalize(), item)
+            self.tipo.addItem(item.value.capitalize(), item.value)
         tipo = vertice.tipo if vertice else tipo_sugerido
         if tipo is not None:
-            self.tipo.setCurrentIndex(self.tipo.findData(tipo))
+            self.tipo.setCurrentIndex(self.tipo.findData(tipo.value))
         formulario.addRow("Identificador", self.identificador)
         formulario.addRow("Nome", self.nome)
         formulario.addRow("Tipo", self.tipo)
@@ -70,10 +70,14 @@ class DialogoVertice(QDialog):
         self.accept()
 
     def dados(self) -> tuple[str, str, TipoVertice]:
+        try:
+            tipo = TipoVertice(self.tipo.currentData())
+        except (TypeError, ValueError) as erro:
+            raise ValueError("O tipo de ponto selecionado é inválido.") from erro
         return (
             self.identificador.text().strip(),
             self.nome.text().strip(),
-            self.tipo.currentData(),
+            tipo,
         )
 
 
@@ -107,8 +111,12 @@ class DialogoSuperficie(QDialog):
             (ClassificacaoSuperficie.BLOQUEADA, "Área bloqueada / edifício"),
             (ClassificacaoSuperficie.NAO_CLASSIFICADA, "Ainda não classificada"),
         ):
-            self.classificacao.addItem(texto, valor)
-        self.classificacao.setCurrentIndex(self.classificacao.findData(atual))
+            # QVariant normaliza enums que herdam de str para str puro. O dado
+            # armazenado é deliberadamente o valor serializável e valor() faz a
+            # conversão explícita de volta ao contrato do domínio.
+            self.classificacao.addItem(texto, valor.value)
+        indice_atual = self.classificacao.findData(atual.value)
+        self.classificacao.setCurrentIndex(max(indice_atual, 0))
         layout.addWidget(self.classificacao)
         botoes = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
@@ -119,7 +127,10 @@ class DialogoSuperficie(QDialog):
         layout.addWidget(botoes)
 
     def valor(self) -> ClassificacaoSuperficie:
-        return self.classificacao.currentData()
+        try:
+            return ClassificacaoSuperficie(self.classificacao.currentData())
+        except (TypeError, ValueError) as erro:
+            raise ValueError("A classificação selecionada é inválida.") from erro
 
 
 class DialogoRua(QDialog):

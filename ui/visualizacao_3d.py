@@ -81,6 +81,7 @@ class Visualizacao3D(QQuickWidget):
         self._botao_mouse = None
         self._mouse_arrastou = False
         self._modo_interacao = "navegar"
+        self._origem_ultimo_pick = "nenhuma"
 
     @property
     def referencias_modelos(self) -> tuple[Path, Path]:
@@ -329,6 +330,9 @@ class Visualizacao3D(QQuickWidget):
         material: str,
         encontrado: bool,
     ) -> None:
+        raiz = self.rootObject()
+        origem = raiz.property("origemUltimoPick") if raiz is not None else None
+        self._origem_ultimo_pick = str(origem or "nenhuma")
         self.ponto_selecionado.emit(
             float(x),
             float(y),
@@ -337,6 +341,10 @@ class Visualizacao3D(QQuickWidget):
             str(material),
             bool(encontrado),
         )
+
+    @property
+    def origem_ultimo_pick(self) -> str:
+        return self._origem_ultimo_pick
 
     def solicitar_pick(self, x: float, y: float) -> None:
         raiz = self.rootObject()

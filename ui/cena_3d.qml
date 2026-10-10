@@ -41,6 +41,7 @@ Item {
     property var segmentosPrevia: []
     property var segmentosRota: []
     property var marcadoresRota: []
+    property string origemUltimoPick: "nenhuma"
     property bool marcadorTemporarioVisivel: false
     property vector3d marcadorTemporarioPosicao: Qt.vector3d(0, 0, 0)
 
@@ -55,13 +56,38 @@ Item {
         }
     }
 
+    function descendeDe(no, ancestral) {
+        let atual = no
+        while (atual) {
+            if (atual === ancestral)
+                return true
+            atual = atual.parent
+        }
+        return false
+    }
+
+    function origemDoPick(no, nome) {
+        if (descendeDe(no, cidadeLoader.item))
+            return "cidade"
+        if (descendeDe(no, carroLoader.item))
+            return "carro"
+        if (nome.startsWith("vertice:") || nome.startsWith("aresta:")
+                || nome.startsWith("marcador-rota:")
+                || nome === "destaque-rota" || nome === "previa-rua"
+                || nome === "marcador-temporario")
+            return "editor"
+        return "outro"
+    }
+
     function executarPick(x, y) {
         const resultado = visualizacao.pick(x, y)
         if (!resultado.objectHit) {
+            origemUltimoPick = "nenhuma"
             pontoSelecionado(0, 0, 0, "", "", false)
             return
         }
         const objeto = resultado.objectHit.objectName || "malha-sem-nome"
+        origemUltimoPick = origemDoPick(resultado.objectHit, objeto)
         let material = ""
         try {
             if (resultado.objectHit.materials

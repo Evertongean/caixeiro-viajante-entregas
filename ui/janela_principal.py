@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -69,6 +70,9 @@ from .tema import FOLHA_ESTILOS
 from .visualizacao_3d import Visualizacao3D
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 def _layout_sem_margem(widget: QWidget, *, espacamento: int = 0) -> QVBoxLayout:
     layout = QVBoxLayout(widget)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -131,6 +135,7 @@ class JanelaPrincipal(QMainWindow):
         self.editor = EditorCidade3D(self.projeto)
         self.grafo = self.projeto.grafo
         self.caminho_projeto: Path | None = None
+        self.projeto_modificado = False
         self.rota_calculada: RotaCalculada | None = None
         self._calculando_rota = False
         self._atualizando_campos_rota = False
@@ -991,6 +996,7 @@ class JanelaPrincipal(QMainWindow):
         self._atualizar_controles_missao()
 
     def _invalidar_rota_por_edicao(self) -> None:
+        self._definir_projeto_modificado(True)
         if self.rota_calculada is not None:
             self.limpar_rota(
                 status="Cidade alterada. É necessário recalcular a rota."
@@ -1223,6 +1229,16 @@ class JanelaPrincipal(QMainWindow):
             return
         if objeto in {"marcador-temporario", "previa-rua"}:
             return
+        origem_pick = self.visualizacao.origem_ultimo_pick
+        if origem_pick != "cidade":
+            mensagens = {
+                "carro": "O carro não pode ser classificado como superfície da cidade.",
+                "editor": "Marcadores e linhas do editor não podem ser classificados.",
+                "outro": "O objeto selecionado não pertence à malha da cidade.",
+                "nenhuma": "Nenhuma malha da cidade foi selecionada.",
+            }
+            self._definir_instrucao(mensagens.get(origem_pick, mensagens["outro"]))
+            return
         referencia = self.editor.referencia_superficie(objeto, material)
         self._clicar_superficie(posicao, referencia)
 
@@ -1288,8 +1304,24 @@ class JanelaPrincipal(QMainWindow):
                 self,
             )
             if dialogo.exec() == QDialog.DialogCode.Accepted:
-                classificacao = dialogo.valor()
-                self.editor.classificar_superficie(referencia, classificacao)
+                try:
+                    classificacao = dialogo.valor()
+                    LOGGER.debug(
+                        "Classificação recebida para %s: %r (%s)",
+                        referencia,
+                        classificacao,
+                        type(classificacao).__name__,
+                    )
+                    self.editor.classificar_superficie(referencia, classificacao)
+                except (TypeError, ValueError) as erro:
+                    LOGGER.warning(
+                        "Classificação rejeitada para %s: %s", referencia, erro
+                    )
+                    self._mostrar_erro(
+                        "Não foi possível salvar a classificação selecionada. "
+                        "Escolha uma opção válida e tente novamente."
+                    )
+                    return
                 nomes = {
                     "rua": "rua trafegável",
                     "calcada": "calçada",
@@ -1299,6 +1331,7 @@ class JanelaPrincipal(QMainWindow):
                 self._definir_instrucao(
                     f"Classificação manual salva: {nomes[classificacao.value]}."
                 )
+                self._definir_projeto_modificado(True)
                 self._sincronizar_cena()
             return
 
@@ -1566,6 +1599,7 @@ class JanelaPrincipal(QMainWindow):
         except (OSError, TypeError, ValueError) as erro:
             self._mostrar_erro(f"Não foi possível salvar o projeto: {erro}")
             return False
+        self._definir_projeto_modificado(False)
         self._definir_instrucao(f"Projeto salvo em {self.caminho_projeto.name}.")
         return True
 
@@ -1602,8 +1636,16 @@ class JanelaPrincipal(QMainWindow):
         self._inicializar_posicoes_legadas()
         self._sincronizar_cena()
         self._modo_navegar()
+        self._definir_projeto_modificado(False)
         self._definir_instrucao(f"Projeto {self.caminho_projeto.name} carregado.")
         return True
+
+    def _definir_projeto_modificado(self, modificado: bool) -> None:
+        self.projeto_modificado = bool(modificado)
+        if hasattr(self, "botao_salvar_projeto"):
+            self.botao_salvar_projeto.setText(
+                "Salvar •" if self.projeto_modificado else "Salvar"
+            )
 
     def _inicializar_posicoes_legadas(self) -> None:
         if self.visualizacao.info_cidade is None:

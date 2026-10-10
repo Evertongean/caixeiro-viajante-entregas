@@ -12,7 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QTimer, Qt
     from PySide6.QtQuickWidgets import QQuickWidget
     from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
@@ -20,7 +20,8 @@ try:
     from ui.assets_3d import ConversorBalsam
     from ui.camera_orbital import ModoCamera
     from ui.janela_principal import JanelaPrincipal
-    from models.projeto_cidade import GeometriaRua
+    from models.projeto_cidade import ClassificacaoSuperficie, GeometriaRua
+    from ui.dialogos_editor import DialogoSuperficie, DialogoVertice
 
     PYSIDE6_DISPONIVEL = True
 except ModuleNotFoundError:
@@ -300,9 +301,12 @@ class TestNovaInterface(unittest.TestCase):
             with self.subTest(tamanho=(largura, altura)):
                 janela.resize(largura, altura)
                 self.aplicacao.processEvents()
-                self.assertEqual(
-                    (janela.width(), janela.height()), (largura, altura)
-                )
+                if QApplication.platformName() == "offscreen":
+                    esperado = (largura, altura)
+                else:
+                    area = janela.screen().availableGeometry()
+                    esperado = (min(largura, area.width()), min(altura, area.height()))
+                self.assertEqual((janela.width(), janela.height()), esperado)
                 self.assertGreaterEqual(janela.visualizacao.width(), 450)
                 self.assertGreaterEqual(janela.visualizacao.height(), 230)
                 self.assertGreaterEqual(janela.divisor.sizes()[1], 280)
@@ -321,6 +325,146 @@ class TestNovaInterface(unittest.TestCase):
         self.assertFalse(janela.botao_navegar.isChecked())
         self.assertIn("Classificar superfície", janela.estado_ferramenta.text())
         self.assertIn("manualmente", janela.instrucao_editor.text())
+
+    def test_fluxo_real_classifica_persiste_e_permite_criar_ponto(self) -> None:
+        janela = self.criar_janela()
+        referencia = "wh_plane_0|gray"
+        janela._ativar_classificacao()
+        janela.visualizacao._origem_ultimo_pick = "cidade"
+
+        def escolher(classificacao: ClassificacaoSuperficie) -> list[QDialog]:
+            capturados = []
+
+            def responder() -> None:
+                dialogo = QApplication.activeModalWidget()
+                if isinstance(dialogo, DialogoSuperficie):
+                    capturados.append(dialogo)
+                    indice = dialogo.classificacao.findData(classificacao.value)
+                    dialogo.classificacao.setCurrentIndex(indice)
+                    dialogo.accept()
+
+            QTimer.singleShot(0, responder)
+            janela._processar_pick(1.0, 0.0, 2.0, "wh_plane_0", "gray", True)
+            return capturados
+
+        for classificacao in (
+            ClassificacaoSuperficie.RUA,
+            ClassificacaoSuperficie.CALCADA,
+            ClassificacaoSuperficie.BLOQUEADA,
+            ClassificacaoSuperficie.RUA,
+        ):
+            with self.subTest(classificacao=classificacao):
+                capturados = escolher(classificacao)
+                self.assertEqual(len(capturados), 1)
+                self.assertIs(
+                    janela.projeto.superficies[referencia], classificacao
+                )
+                self.assertEqual(len(janela.projeto.superficies), 1)
+
+        self.assertIn("Superfícies rua: 1", janela.resumo_editor.text())
+        self.assertTrue(janela.projeto_modificado)
+        self.assertEqual(janela.botao_salvar_projeto.text(), "Salvar •")
+
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = Path(pasta) / "classificacao.json"
+            self.assertTrue(janela.salvar_projeto(caminho))
+            self.assertFalse(janela.projeto_modificado)
+            self.assertTrue(janela.abrir_projeto(caminho))
+        self.assertIs(
+            janela.projeto.superficies[referencia], ClassificacaoSuperficie.RUA
+        )
+        self.assertIn("Superfícies rua: 1", janela.resumo_editor.text())
+
+        janela._ativar_adicao(None)
+        janela.visualizacao._origem_ultimo_pick = "cidade"
+        vertices_antes = len(janela.grafo.listar_vertices())
+
+        def cadastrar_ponto() -> None:
+            dialogo = QApplication.activeModalWidget()
+            if isinstance(dialogo, DialogoVertice):
+                dialogo.identificador.setText("P26")
+                dialogo.nome.setText("Ponto do asfalto")
+                indice = dialogo.tipo.findData(TipoVertice.CRUZAMENTO.value)
+                dialogo.tipo.setCurrentIndex(indice)
+                dialogo.accept()
+
+        QTimer.singleShot(0, cadastrar_ponto)
+        janela._processar_pick(1.0, 0.0, 2.0, "wh_plane_0", "gray", True)
+        self.assertEqual(len(janela.grafo.listar_vertices()), vertices_antes + 1)
+        self.assertIs(
+            janela.grafo.obter_vertice("P26").tipo, TipoVertice.CRUZAMENTO
+        )
+
+    def test_cancelar_classificacao_nao_altera_projeto(self) -> None:
+        janela = self.criar_janela()
+        janela._ativar_classificacao()
+        janela.visualizacao._origem_ultimo_pick = "cidade"
+
+        def cancelar() -> None:
+            dialogo = QApplication.activeModalWidget()
+            if isinstance(dialogo, DialogoSuperficie):
+                dialogo.reject()
+
+        QTimer.singleShot(0, cancelar)
+        janela._processar_pick(1.0, 0.0, 2.0, "wh_plane_0", "gray", True)
+        self.assertEqual(janela.projeto.superficies, {})
+        self.assertFalse(janela.projeto_modificado)
+
+    def test_pick_vazio_e_objetos_fora_da_cidade_sao_rejeitados(self) -> None:
+        janela = self.criar_janela()
+        janela._ativar_classificacao()
+        janela._processar_pick(0, 0, 0, "", "", False)
+        self.assertIn("Nenhuma geometria", janela.instrucao_editor.text())
+
+        for origem, mensagem in (
+            ("carro", "carro não pode"),
+            ("editor", "Marcadores e linhas"),
+            ("outro", "não pertence"),
+        ):
+            with self.subTest(origem=origem):
+                janela.visualizacao._origem_ultimo_pick = origem
+                with patch("ui.janela_principal.DialogoSuperficie") as dialogo:
+                    janela._processar_pick(0, 0, 0, "objeto", "material", True)
+                dialogo.assert_not_called()
+                self.assertIn(mensagem, janela.instrucao_editor.text())
+
+    def test_classificacao_invalida_na_integracao_e_tratada_sem_alteracao(self) -> None:
+        janela = self.criar_janela()
+        janela._ativar_classificacao()
+        with (
+            patch("ui.janela_principal.DialogoSuperficie") as dialogo,
+            patch("ui.janela_principal.QMessageBox.warning") as aviso,
+        ):
+            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialogo.return_value.valor.side_effect = ValueError(
+                "A classificação selecionada é inválida."
+            )
+            janela._clicar_superficie((1.0, 0.0, 2.0), "wh_plane_0|gray")
+        self.assertEqual(janela.projeto.superficies, {})
+        aviso.assert_called_once()
+        self.assertIn("Escolha uma opção válida", janela.instrucao_editor.text())
+
+    def test_pick_real_da_malha_da_cidade_quando_backend_disponivel(self) -> None:
+        janela = self.criar_janela()
+        janela.resize(1366, 768)
+        self.aplicacao.processEvents()
+        janela.visualizacao.inicializar()
+        for _ in range(30):
+            self.aplicacao.processEvents()
+        if not janela.visualizacao.renderizacao_real_disponivel:
+            self.skipTest("O backend headless não oferece picking Qt Quick 3D real.")
+
+        recebidos = []
+        janela.visualizacao.ponto_selecionado.connect(
+            lambda *dados: recebidos.append(dados)
+        )
+        janela.visualizacao.solicitar_pick(526, 400)
+        for _ in range(10):
+            self.aplicacao.processEvents()
+        self.assertTrue(recebidos)
+        self.assertTrue(recebidos[-1][-1])
+        self.assertEqual(janela.visualizacao.origem_ultimo_pick, "cidade")
+        self.assertEqual(recebidos[-1][3:5], ("wh_plane_0", "plane"))
 
     def test_sincronizacao_nao_recria_campos_quando_grafo_nao_mudou(self) -> None:
         janela = self.criar_janela()
