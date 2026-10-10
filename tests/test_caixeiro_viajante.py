@@ -192,6 +192,25 @@ class TestCaixeiroViajante(unittest.TestCase):
         for identificador, vizinhos in vizinhos_antes.items():
             self.assertEqual(self.grafo.obter_vizinhos(identificador), vizinhos)
 
+    def test_registro_de_etapas_e_opcional_e_estruturado(self) -> None:
+        normal = caixeiro_viajante(self.grafo)
+        com_historico = caixeiro_viajante(
+            self.grafo, registrar_etapas=True
+        )
+
+        avaliacoes = [
+            etapa
+            for etapa in com_historico.etapas
+            if etapa.fase == "avaliacao"
+        ]
+        self.assertEqual(len(avaliacoes), normal.sequencias_avaliadas)
+        self.assertEqual(com_historico.ordem_entregas, normal.ordem_entregas)
+        self.assertEqual(com_historico.distancia_total, normal.distancia_total)
+        self.assertEqual(com_historico.etapas[-1].melhor_distancia, 15)
+        self.assertTrue(
+            any("Nova melhor" in etapa.descricao for etapa in avaliacoes)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

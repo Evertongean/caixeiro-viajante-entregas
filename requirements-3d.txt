@@ -1,5 +1,0 @@
-# Backend alternativo opcional. O caminho principal usa Qt Quick 3D e o
-# pyside6-balsam que acompanha o PySide6 para converter GLB em QML/.mesh.
-# O aplicativo e a suíte headless continuam funcionando sem estes pacotes.
-panda3d>=1.10,<2
-panda3d-gltf>=0.13,<1
