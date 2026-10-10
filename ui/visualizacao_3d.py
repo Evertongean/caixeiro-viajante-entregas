@@ -82,6 +82,7 @@ class Visualizacao3D(QQuickWidget):
         self._mouse_arrastou = False
         self._modo_interacao = "navegar"
         self._origem_ultimo_pick = "nenhuma"
+        self._rede_ruas_visivel = True
 
     @property
     def referencias_modelos(self) -> tuple[Path, Path]:
@@ -156,6 +157,7 @@ class Visualizacao3D(QQuickWidget):
             raiz.setProperty("carroFonte", QUrl.fromLocalFile(str(carro.qml)))
             raiz.setProperty("escalaCidade", self.escala_cidade)
             raiz.setProperty("escalaCarro", self.escala_carro)
+            raiz.setProperty("mostrarRedeRuas", self._rede_ruas_visivel)
             self._configurar_carro_inicial()
             self.enquadrar_cidade()
             self.modelos_preparados = True
@@ -363,6 +365,12 @@ class Visualizacao3D(QQuickWidget):
         raiz = self.rootObject()
         if raiz is not None:
             raiz.setProperty("segmentosRuas", list(segmentos))
+
+    def definir_rede_ruas_visivel(self, visivel: bool) -> None:
+        self._rede_ruas_visivel = bool(visivel)
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("mostrarRedeRuas", self._rede_ruas_visivel)
 
     def atualizar_previa_rua(self, segmentos: list[dict[str, object]]) -> None:
         raiz = self.rootObject()

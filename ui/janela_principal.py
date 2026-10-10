@@ -445,6 +445,12 @@ class JanelaPrincipal(QMainWindow):
         acoes.addWidget(self.botao_limpar_rota)
         acoes.addWidget(self.botao_enquadrar_rota)
         layout.addLayout(acoes)
+        self.mostrar_rede_ruas = QCheckBox("Mostrar rede de ruas")
+        self.mostrar_rede_ruas.setChecked(True)
+        self.mostrar_rede_ruas.setToolTip(
+            "Mantém as conexões cadastradas visíveis sob o destaque da rota."
+        )
+        layout.addWidget(self.mostrar_rede_ruas)
 
         self.resultado_ordem = QLabel()
         self.resultado_ordem.setObjectName("resultadoRota")
@@ -465,6 +471,9 @@ class JanelaPrincipal(QMainWindow):
 
         self.seletor_algoritmo.currentIndexChanged.connect(
             self._algoritmo_rota_alterado
+        )
+        self.mostrar_rede_ruas.toggled.connect(
+            self.visualizacao.definir_rede_ruas_visivel
         )
         self.origem.currentIndexChanged.connect(self._entrada_rota_alterada)
         self.destino.currentIndexChanged.connect(self._entrada_rota_alterada)
@@ -562,13 +571,23 @@ class JanelaPrincipal(QMainWindow):
         if not rota.segmentos_espaciais:
             return False, "A rota é trivial e não possui um trajeto para animar."
         if not rota.calibracao_completa:
-            pendentes = ", ".join(
-                f"{origem}↔{destino}" for origem, destino in rota.arestas_pendentes
-            )
-            return False, f"Confirme manualmente os trechos pendentes: {pendentes}."
+            return False, self._texto_ruas_pendentes(rota.arestas_pendentes)
         if not self.visualizacao.modelos_preparados:
             return False, "Aguarde o carregamento do carro e da cidade 3D."
         return True, "Rota calibrada e pronta para iniciar."
+
+    @staticmethod
+    def _texto_ruas_pendentes(
+        arestas: tuple[tuple[str, str], ...],
+    ) -> str:
+        nomes = [f"{origem} ↔ {destino}" for origem, destino in arestas]
+        if len(nomes) == 1:
+            introducao = f"Rua {nomes[0]} necessita de calibração espacial."
+        else:
+            introducao = (
+                f"Ruas {'; '.join(nomes)} necessitam de calibração espacial."
+            )
+        return introducao + " Use Criar rua para traçar e confirmar cada conexão."
 
     def _atualizar_controles_missao(self) -> None:
         estado = (
@@ -954,12 +973,8 @@ class JanelaPrincipal(QMainWindow):
             )
             self.cartao_status.definir("Rota pronta para missão 3D.")
         else:
-            pendentes = ", ".join(
-                f"{origem}↔{destino}"
-                for origem, destino in rota.arestas_pendentes
-            )
             self.resultado_calibracao.setText(
-                f"Trechos pendentes de calibração espacial: {pendentes}."
+                self._texto_ruas_pendentes(rota.arestas_pendentes)
             )
             self.cartao_status.definir(
                 "Rota calculada, mas com ruas pendentes de calibração."
@@ -1138,17 +1153,21 @@ class JanelaPrincipal(QMainWindow):
             )
         self._atualizar_campos_grafo()
         calibradas = sum(
-            geometria.calibrada_manualmente for geometria in self.projeto.ruas.values()
+            geometria.calibrada_manualmente
+            and len(self.projeto.polilinha_rua(*chave)) >= 2
+            for chave, geometria in self.projeto.ruas.items()
         )
-        total_ruas = len(self.projeto.ruas)
+        total_conexoes = len(self.grafo.listar_arestas())
+        total_tracadas = len(self.projeto.ruas)
         superficies_rua = sum(
             classificacao.value == "rua"
             for classificacao in self.projeto.superficies.values()
         )
         self.resumo_editor.setText(
-            f"Superfícies rua: {superficies_rua} · ruas calibradas: {calibradas} · "
-            f"pendentes: {total_ruas - calibradas}\n"
-            "Azul = calibrada · laranja = pendente/selecionada"
+            f"Superfícies rua: {superficies_rua} · conexões: {total_conexoes} · "
+            f"traçadas: {total_tracadas} · confirmadas: {calibradas} · "
+            f"pendentes: {total_conexoes - calibradas}\n"
+            "Azul acinzentado = calibrada · laranja = pendente/selecionada"
         )
 
     def _atualizar_campos_grafo(self, *, force: bool = False) -> None:

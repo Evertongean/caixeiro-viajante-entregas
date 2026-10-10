@@ -129,7 +129,7 @@ class TestEditorCidade3D(unittest.TestCase):
         self.projeto.ruas[chave] = GeometriaRua("D", "C1", [], False)
         self.assertEqual(self.editor.segmentos_ruas_qml()[0]["cor"], "#FB923C")
         self.projeto.ruas[chave].calibrada_manualmente = True
-        self.assertEqual(self.editor.segmentos_ruas_qml()[0]["cor"], "#38BDF8")
+        self.assertEqual(self.editor.segmentos_ruas_qml()[0]["cor"], "#5B7896")
 
     def test_reposiciona_e_edita_vertice_preservando_conexoes(self) -> None:
         self._criar_rede_minima()

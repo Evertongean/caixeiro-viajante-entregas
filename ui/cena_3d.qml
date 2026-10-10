@@ -41,6 +41,9 @@ Item {
     property var segmentosPrevia: []
     property var segmentosRota: []
     property var marcadoresRota: []
+    property bool mostrarRedeRuas: true
+    property real larguraRedeMundo: 0.0035
+    property real espessuraRedeMundo: 0.0008
     // O cubo primitivo mede 100 unidades. Estes valores sao dimensoes reais
     // na cena, e nao escalas magicas dependentes da camera.
     property real larguraRotaMundo: 0.006
@@ -274,21 +277,19 @@ Item {
                 required property var modelData
                 objectName: "aresta:" + modelData.aresta
                 source: "#Cube"
-                // A malha viaria auxilia o editor. Com uma rota calculada,
-                // somente a fita do percurso deve disputar a leitura da rua.
-                visible: raiz.segmentosRota.length === 0
+                visible: raiz.mostrarRedeRuas
                 pickable: visible && raiz.modoInteracao === "navegar"
                 position: raiz.centroSegmento(modelData)
                 eulerRotation: raiz.rotacaoSegmento(modelData)
                 scale: Qt.vector3d(
-                    0.00010,
-                    0.00010,
+                    raiz.larguraRedeMundo / 100,
+                    raiz.espessuraRedeMundo / 100,
                     raiz.comprimentoSegmento(modelData) / 100
                 )
                 materials: PrincipledMaterial {
                     baseColor: segmentoRua.modelData.cor
-                    emissiveFactor: Qt.vector3d(0.12, 0.25, 0.40)
-                    roughness: 0.35
+                    emissiveFactor: Qt.vector3d(0.03, 0.06, 0.09)
+                    roughness: 0.48
                 }
             }
         }
@@ -304,8 +305,8 @@ Item {
                 position: raiz.centroSegmento(modelData)
                 eulerRotation: raiz.rotacaoSegmento(modelData)
                 scale: Qt.vector3d(
-                    0.00014,
-                    0.00014,
+                    0.00005,
+                    0.00001,
                     raiz.comprimentoSegmento(modelData) / 100
                 )
                 materials: PrincipledMaterial {

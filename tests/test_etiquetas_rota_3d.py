@@ -215,9 +215,16 @@ class TestEtiquetasERota3D(unittest.TestCase):
         self.assertAlmostEqual(horizontal.y(), 90.0)
         self.assertAlmostEqual(inclinada.x(), -45.0)
 
-    def test_rede_do_editor_nao_duplica_visual_da_rota_calculada(self) -> None:
+    def test_rede_do_editor_e_uma_camada_fina_controlavel(self) -> None:
         fonte = self.qml.read_text(encoding="utf-8")
-        self.assertIn("visible: raiz.segmentosRota.length === 0", fonte)
+        self.assertIn("visible: raiz.mostrarRedeRuas", fonte)
+        self.assertTrue(self.raiz.property("mostrarRedeRuas"))
+        self.assertLess(
+            self.raiz.property("larguraRedeMundo"),
+            self.raiz.property("larguraRotaMundo"),
+        )
+        self.raiz.setProperty("mostrarRedeRuas", False)
+        self.assertFalse(self.raiz.property("mostrarRedeRuas"))
 
 
 if __name__ == "__main__":

@@ -53,10 +53,32 @@ class ProjetoCidade:
 
     @staticmethod
     def chave_aresta(origem: str, destino: str) -> tuple[str, str]:
+        """Identidade canônica e sem colisões de uma aresta não direcionada."""
         return tuple(sorted((origem, destino)))  # type: ignore[return-value]
 
     def geometria_rua(self, origem: str, destino: str) -> GeometriaRua | None:
         return self.ruas.get(self.chave_aresta(origem, destino))
+
+    def polilinha_rua(
+        self, origem: str, destino: str
+    ) -> tuple[tuple[float, float, float], ...]:
+        """Retorna a geometria na orientação solicitada, sem mudar sua identidade."""
+        geometria = self.geometria_rua(origem, destino)
+        if geometria is None:
+            return ()
+        try:
+            pontos = [
+                self.posicoes[geometria.origem],
+                *geometria.pontos_intermediarios,
+                self.posicoes[geometria.destino],
+            ]
+        except KeyError:
+            return ()
+        if (origem, destino) == (geometria.origem, geometria.destino):
+            return tuple(pontos)
+        if (origem, destino) == (geometria.destino, geometria.origem):
+            return tuple(reversed(pontos))
+        return ()
 
 
 def _vetor3(valor: Any, campo: str) -> tuple[float, float, float]:
@@ -222,18 +244,31 @@ def projeto_de_dados(dados: Any) -> ProjetoCidade:
             raise ErroPersistencia(
                 f"A calibração manual da rua {indice + 1} deve ser booleana."
             )
+        chave = ProjetoCidade.chave_aresta(origem, destino)
+        pontos = [
+            _vetor3(ponto, f"ruas[{indice}].pontos_intermediarios")
+            for ponto in pontos_brutos
+        ]
+        if origem != chave[0]:
+            pontos.reverse()
         geometria = GeometriaRua(
-            origem=origem,
-            destino=destino,
-            pontos_intermediarios=[
-                _vetor3(ponto, f"ruas[{indice}].pontos_intermediarios")
-                for ponto in pontos_brutos
-            ],
+            origem=chave[0],
+            destino=chave[1],
+            pontos_intermediarios=pontos,
             calibrada_manualmente=calibrada,
         )
-        chave = ProjetoCidade.chave_aresta(origem, destino)
         if chave in ruas:
-            raise ErroPersistencia("Há geometrias duplicadas para a mesma rua.")
+            existente = ruas[chave]
+            if existente.pontos_intermediarios != geometria.pontos_intermediarios:
+                raise ErroPersistencia(
+                    f"A rua {chave[0]} ↔ {chave[1]} possui geometrias duplicadas "
+                    "e conflitantes; a migração automática não é segura."
+                )
+            existente.calibrada_manualmente = bool(
+                existente.calibrada_manualmente
+                or geometria.calibrada_manualmente
+            )
+            continue
         ruas[chave] = geometria
 
     return ProjetoCidade(

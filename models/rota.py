@@ -88,25 +88,18 @@ def _segmentos_espaciais(
 ]:
     segmentos: list[SegmentoEspacialRota] = []
     pendentes: list[tuple[str, str]] = []
+    chaves_pendentes: set[tuple[str, str]] = set()
     for indice, (origem, destino) in enumerate(zip(percurso, percurso[1:])):
         geometria = projeto.geometria_rua(origem, destino)
-        pontos: tuple[Ponto3D, ...] = ()
+        pontos = projeto.polilinha_rua(origem, destino)
         confirmado = False
         if geometria is not None:
-            try:
-                pontos_lista = [
-                    projeto.posicoes[geometria.origem],
-                    *geometria.pontos_intermediarios,
-                    projeto.posicoes[geometria.destino],
-                ]
-            except KeyError:
-                pontos_lista = []
-            if geometria.origem != origem:
-                pontos_lista.reverse()
-            pontos = tuple(pontos_lista)
             confirmado = bool(geometria.calibrada_manualmente and len(pontos) >= 2)
         if not confirmado:
-            pendentes.append((origem, destino))
+            chave = projeto.chave_aresta(origem, destino)
+            if chave not in chaves_pendentes:
+                pendentes.append(chave)
+                chaves_pendentes.add(chave)
         segmentos.append(
             SegmentoEspacialRota(
                 indice=indice,

@@ -93,7 +93,7 @@ class TestRotaIntegrada(unittest.TestCase):
         self.assertEqual(rota.estado_espacial, EstadoEspacial.INDISPONIVEL)
         self.assertEqual(
             rota.arestas_pendentes,
-            (("D", "X"), ("X", "A"), ("A", "B")),
+            (("D", "X"), ("A", "X"), ("A", "B")),
         )
         self.assertEqual(segmentos_rota_qml(rota), [])
 
@@ -135,6 +135,59 @@ class TestRotaIntegrada(unittest.TestCase):
         self.assertEqual(len(rota.segmentos_espaciais), 2)
         segmentos = segmentos_rota_qml(rota)
         self.assertEqual([item["sequencia"] for item in segmentos], [0, 1])
+        self.assertTrue(rota.calibracao_completa)
+        self.assertEqual(
+            rota.segmentos_espaciais[1].pontos,
+            tuple(reversed(rota.segmentos_espaciais[0].pontos)),
+        )
+
+    def test_tsp_deduplica_pendencia_repetida_nos_dois_sentidos(self) -> None:
+        grafo = Grafo()
+        grafo.adicionar_vertice(Vertice("D", "Base", TipoVertice.DEPOSITO, 0, 0))
+        grafo.adicionar_vertice(Vertice("A", "Cliente A", TipoVertice.CLIENTE, 1, 0))
+        grafo.adicionar_vertice(Vertice("B", "Cliente B", TipoVertice.CLIENTE, 2, 0))
+        grafo.adicionar_aresta("D", "B", 1)
+        grafo.adicionar_aresta("A", "B", 1)
+        projeto = ProjetoCidade(
+            grafo=grafo,
+            posicoes={"D": (0, 0, 0), "B": (1, 0, 0), "A": (2, 0, 0)},
+            ruas={
+                ("B", "D"): GeometriaRua("D", "B", [], True),
+            },
+        )
+
+        rota = calcular_tsp(projeto, ["A", "B"])
+        sentidos_ab = [
+            (segmento.origem, segmento.destino)
+            for segmento in rota.segmentos_espaciais
+            if {segmento.origem, segmento.destino} == {"A", "B"}
+        ]
+        self.assertEqual(set(sentidos_ab), {("A", "B"), ("B", "A")})
+        self.assertEqual(rota.arestas_pendentes, (("A", "B"),))
+        self.assertFalse(rota.calibracao_completa)
+
+        projeto.ruas[("A", "B")] = GeometriaRua(
+            "B", "A", [(1.5, 0, 0.1)], True
+        )
+        confirmada = calcular_tsp(projeto, ["A", "B"])
+        self.assertTrue(confirmada.calibracao_completa)
+        self.assertEqual(confirmada.arestas_pendentes, ())
+        segmentos_ab = [
+            segmento
+            for segmento in confirmada.segmentos_espaciais
+            if {segmento.origem, segmento.destino} == {"A", "B"}
+        ]
+        self.assertEqual(segmentos_ab[1].pontos, tuple(reversed(segmentos_ab[0].pontos)))
+
+    def test_chave_nao_direcionada_e_estavel_para_identificadores_compostos(self) -> None:
+        self.assertEqual(
+            self.projeto.chave_aresta("X10", "X2"),
+            self.projeto.chave_aresta("X2", "X10"),
+        )
+        self.assertNotEqual(
+            self.projeto.chave_aresta("X1", "X23"),
+            self.projeto.chave_aresta("X12", "X3"),
+        )
 
     def test_marcadores_destacam_inicio_fim_e_clientes(self) -> None:
         self.configurar_percurso_demonstracao()

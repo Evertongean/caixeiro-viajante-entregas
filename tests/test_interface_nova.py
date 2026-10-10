@@ -98,9 +98,10 @@ class TestNovaInterface(unittest.TestCase):
         janela.destino.setCurrentIndex(janela.destino.findData("B"))
         janela.botao_calcular.click()
         self.assertFalse(janela.botao_iniciar.isEnabled())
-        self.assertIn("D↔X", janela.botao_iniciar.toolTip())
-        self.assertIn("X↔A", janela.botao_iniciar.toolTip())
-        self.assertIn("A↔B", janela.botao_iniciar.toolTip())
+        self.assertIn("D ↔ X", janela.botao_iniciar.toolTip())
+        self.assertIn("A ↔ X", janela.botao_iniciar.toolTip())
+        self.assertIn("A ↔ B", janela.botao_iniciar.toolTip())
+        self.assertIn("Use Criar rua", janela.botao_iniciar.toolTip())
 
     def test_missao_inicia_bloqueia_edicao_pausa_e_encerra(self) -> None:
         janela = self.criar_janela()
@@ -224,6 +225,59 @@ class TestNovaInterface(unittest.TestCase):
         self.assertEqual(
             janela.resultado_clientes.text(), "Clientes selecionados: A, B, C"
         )
+
+    def test_calculo_preserva_rede_e_controle_de_visibilidade(self) -> None:
+        janela = self.criar_janela()
+        janela._sincronizar_cena()
+        self.assertIn("conexões: 7", janela.resumo_editor.text())
+        self.assertIn("traçadas: 0", janela.resumo_editor.text())
+        self.assertIn("pendentes: 7", janela.resumo_editor.text())
+        janela.projeto.posicoes = {
+            vertice.identificador: (vertice.x, 0.0, vertice.y)
+            for vertice in janela.grafo.listar_vertices()
+        }
+        for aresta in janela.grafo.listar_arestas():
+            origem = aresta.origem.identificador
+            destino = aresta.destino.identificador
+            chave = janela.projeto.chave_aresta(origem, destino)
+            janela.projeto.ruas[chave] = GeometriaRua(origem, destino, [], True)
+        janela._sincronizar_cena()
+        self.assertIn("confirmadas: 7", janela.resumo_editor.text())
+        self.assertIn("pendentes: 0", janela.resumo_editor.text())
+        ruas_antes = dict(janela.projeto.ruas)
+
+        janela.seletor_algoritmo.setCurrentIndex(1)
+        janela.botao_calcular.click()
+        self.assertEqual(janela.projeto.ruas, ruas_antes)
+        self.assertTrue(janela.mostrar_rede_ruas.isChecked())
+        self.assertTrue(janela.visualizacao._rede_ruas_visivel)
+
+        janela.mostrar_rede_ruas.setChecked(False)
+        self.assertFalse(janela.visualizacao._rede_ruas_visivel)
+
+    def test_tsp_confirmado_habilita_missao_e_pendencia_real_bloqueia(self) -> None:
+        janela = self.criar_janela()
+        janela.visualizacao.modelos_preparados = True
+        janela.projeto.posicoes = {
+            vertice.identificador: (vertice.x, 0.0, vertice.y)
+            for vertice in janela.grafo.listar_vertices()
+        }
+        for aresta in janela.grafo.listar_arestas():
+            origem = aresta.origem.identificador
+            destino = aresta.destino.identificador
+            chave = janela.projeto.chave_aresta(origem, destino)
+            janela.projeto.ruas[chave] = GeometriaRua(origem, destino, [], True)
+        janela.seletor_algoritmo.setCurrentIndex(1)
+        janela.botao_calcular.click()
+        self.assertTrue(janela.rota_calculada.calibracao_completa)
+        self.assertTrue(janela.botao_iniciar.isEnabled())
+
+        del janela.projeto.ruas[janela.projeto.chave_aresta("A", "B")]
+        janela.botao_calcular.click()
+        self.assertFalse(janela.rota_calculada.calibracao_completa)
+        self.assertFalse(janela.botao_iniciar.isEnabled())
+        self.assertEqual(janela.rota_calculada.arestas_pendentes, (("A", "B"),))
+        self.assertEqual(janela.resultado_calibracao.text().count("A ↔ B"), 1)
 
     def test_tsp_sem_clientes_mostra_erro_claro_sem_criar_rota(self) -> None:
         janela = self.criar_janela()

@@ -393,10 +393,10 @@ class EditorCidade3D:
                     "aresta": identificador,
                     "cor": cor,
                     "ax": a[0],
-                    "ay": a[1] + 0.018,
+                    "ay": a[1] + 0.004,
                     "az": a[2],
                     "bx": b[0],
-                    "by": b[1] + 0.018,
+                    "by": b[1] + 0.004,
                     "bz": b[2],
                 }
             )
@@ -414,7 +414,7 @@ class EditorCidade3D:
             if self.selecao == ("aresta", *chave):
                 cor = "#F59E0B"
             elif geometria.calibrada_manualmente:
-                cor = "#38BDF8"
+                cor = "#5B7896"
             else:
                 cor = "#FB923C"
             segmentos.extend(self._segmentos(pontos, identificador, cor))

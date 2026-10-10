@@ -70,6 +70,45 @@ class TestProjetoCidade(unittest.TestCase):
         self.assertEqual(carregado.ruas, {})
         self.assertEqual(carregado.superficies, {})
 
+    def test_normaliza_rua_legada_duplicada_nos_dois_sentidos(self) -> None:
+        dados = projeto_para_dados(self.criar_projeto())
+        rua = dados["editor_3d"]["ruas"][0]
+        rua["pontos_intermediarios"] = [[2, 0.1, 3], [4, 0.1, 6]]
+        rua["calibrada_manualmente"] = False
+        dados["editor_3d"]["ruas"].append(
+            {
+                "origem": rua["destino"],
+                "destino": rua["origem"],
+                "pontos_intermediarios": list(
+                    reversed(rua["pontos_intermediarios"])
+                ),
+                "calibrada_manualmente": True,
+            }
+        )
+
+        carregado = projeto_de_dados(dados)
+        self.assertEqual(len(carregado.ruas), 1)
+        geometria = carregado.geometria_rua("D", "C")
+        self.assertTrue(geometria.calibrada_manualmente)
+        self.assertEqual(
+            carregado.polilinha_rua("D", "C"),
+            tuple(reversed(carregado.polilinha_rua("C", "D"))),
+        )
+
+    def test_rejeita_ruas_legadas_duplicadas_com_geometrias_conflitantes(self) -> None:
+        dados = projeto_para_dados(self.criar_projeto())
+        rua = dados["editor_3d"]["ruas"][0]
+        dados["editor_3d"]["ruas"].append(
+            {
+                "origem": rua["destino"],
+                "destino": rua["origem"],
+                "pontos_intermediarios": [[99, 0.1, 99]],
+                "calibrada_manualmente": True,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "conflitantes.*não é segura"):
+            projeto_de_dados(dados)
+
     def test_rejeita_rua_visual_sem_aresta_oficial(self) -> None:
         dados = projeto_para_dados(self.criar_projeto())
         dados["grafo"]["arestas"] = []
