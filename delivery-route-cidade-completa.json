@@ -1,0 +1,817 @@
+{
+  "formato": "delivery-route-cidade-3d",
+  "versao": 1,
+  "modelos": {
+    "cidade": "assets/models/cidade.glb",
+    "carro": "assets/models/carro.glb"
+  },
+  "grafo": {
+    "formato": "delivery-route-grafo",
+    "versao": 1,
+    "deposito": "D",
+    "vertices": [
+      {
+        "identificador": "D",
+        "nome": "Depósito Central",
+        "tipo": "depósito",
+        "x": -0.55,
+        "y": 0.065
+      },
+      {
+        "identificador": "A",
+        "nome": "Cliente A",
+        "tipo": "cliente",
+        "x": -1.18,
+        "y": 1.549
+      },
+      {
+        "identificador": "B",
+        "nome": "Cliente B",
+        "tipo": "cliente",
+        "x": 0.15,
+        "y": -0.582
+      },
+      {
+        "identificador": "C",
+        "nome": "Cliente C",
+        "tipo": "cliente",
+        "x": -1.468,
+        "y": 0.4
+      },
+      {
+        "identificador": "E",
+        "nome": "Cliente D",
+        "tipo": "cliente",
+        "x": 0.435,
+        "y": 0.63
+      },
+      {
+        "identificador": "F",
+        "nome": "Cliente E",
+        "tipo": "cliente",
+        "x": -0.5,
+        "y": 0.796
+      },
+      {
+        "identificador": "X1",
+        "nome": "Cruzamento X1",
+        "tipo": "cruzamento",
+        "x": -1.468,
+        "y": 1.549
+      },
+      {
+        "identificador": "X2",
+        "nome": "Cruzamento X2",
+        "tipo": "cruzamento",
+        "x": -0.879,
+        "y": 1.549
+      },
+      {
+        "identificador": "X3",
+        "nome": "Cruzamento X3",
+        "tipo": "cruzamento",
+        "x": -0.019,
+        "y": 1.549
+      },
+      {
+        "identificador": "X4",
+        "nome": "Cruzamento X4",
+        "tipo": "cruzamento",
+        "x": 0.435,
+        "y": 1.549
+      },
+      {
+        "identificador": "X5",
+        "nome": "Cruzamento X5",
+        "tipo": "cruzamento",
+        "x": -0.019,
+        "y": 1.156
+      },
+      {
+        "identificador": "X6",
+        "nome": "Cruzamento X6",
+        "tipo": "cruzamento",
+        "x": 0.435,
+        "y": 1.156
+      },
+      {
+        "identificador": "X7",
+        "nome": "Cruzamento X7",
+        "tipo": "cruzamento",
+        "x": -1.468,
+        "y": 0.796
+      },
+      {
+        "identificador": "X8",
+        "nome": "Cruzamento X8",
+        "tipo": "cruzamento",
+        "x": -0.879,
+        "y": 0.796
+      },
+      {
+        "identificador": "X9",
+        "nome": "Cruzamento X9",
+        "tipo": "cruzamento",
+        "x": -0.019,
+        "y": 0.796
+      },
+      {
+        "identificador": "X10",
+        "nome": "Cruzamento X10",
+        "tipo": "cruzamento",
+        "x": -0.019,
+        "y": 0.464
+      },
+      {
+        "identificador": "X11",
+        "nome": "Cruzamento X11",
+        "tipo": "cruzamento",
+        "x": 0.435,
+        "y": 0.464
+      },
+      {
+        "identificador": "X12",
+        "nome": "Cruzamento X12",
+        "tipo": "cruzamento",
+        "x": -1.468,
+        "y": 0.065
+      },
+      {
+        "identificador": "X13",
+        "nome": "Cruzamento X13",
+        "tipo": "cruzamento",
+        "x": -0.879,
+        "y": 0.065
+      },
+      {
+        "identificador": "X14",
+        "nome": "Cruzamento X14",
+        "tipo": "cruzamento",
+        "x": -0.268,
+        "y": 0.065
+      },
+      {
+        "identificador": "X15",
+        "nome": "Cruzamento X15",
+        "tipo": "cruzamento",
+        "x": -0.019,
+        "y": 0.065
+      },
+      {
+        "identificador": "X16",
+        "nome": "Cruzamento X16",
+        "tipo": "cruzamento",
+        "x": 0.435,
+        "y": 0.065
+      },
+      {
+        "identificador": "X17",
+        "nome": "Cruzamento X17",
+        "tipo": "cruzamento",
+        "x": -1.468,
+        "y": -0.582
+      },
+      {
+        "identificador": "X18",
+        "nome": "Cruzamento X18",
+        "tipo": "cruzamento",
+        "x": -0.879,
+        "y": -0.582
+      },
+      {
+        "identificador": "X19",
+        "nome": "Cruzamento X19",
+        "tipo": "cruzamento",
+        "x": -0.268,
+        "y": -0.582
+      },
+      {
+        "identificador": "X20",
+        "nome": "Cruzamento X20",
+        "tipo": "cruzamento",
+        "x": 0.435,
+        "y": -0.582
+      },
+      {
+        "identificador": "X21",
+        "nome": "Cruzamento X21",
+        "tipo": "cruzamento",
+        "x": -0.879,
+        "y": 1.324
+      },
+      {
+        "identificador": "X22",
+        "nome": "Cruzamento X22",
+        "tipo": "cruzamento",
+        "x": -0.879,
+        "y": 1.118
+      },
+      {
+        "identificador": "X23",
+        "nome": "Cruzamento X23",
+        "tipo": "cruzamento",
+        "x": -1.044,
+        "y": 1.324
+      },
+      {
+        "identificador": "X24",
+        "nome": "Cruzamento X24",
+        "tipo": "cruzamento",
+        "x": -1.044,
+        "y": 1.118
+      }
+    ],
+    "arestas": [
+      {
+        "origem": "D",
+        "destino": "X13",
+        "peso": 0.329
+      },
+      {
+        "origem": "D",
+        "destino": "X14",
+        "peso": 0.282
+      },
+      {
+        "origem": "A",
+        "destino": "X1",
+        "peso": 0.288
+      },
+      {
+        "origem": "A",
+        "destino": "X2",
+        "peso": 0.301
+      },
+      {
+        "origem": "B",
+        "destino": "X19",
+        "peso": 0.418
+      },
+      {
+        "origem": "B",
+        "destino": "X20",
+        "peso": 0.285
+      },
+      {
+        "origem": "C",
+        "destino": "X7",
+        "peso": 0.396
+      },
+      {
+        "origem": "C",
+        "destino": "X12",
+        "peso": 0.335
+      },
+      {
+        "origem": "E",
+        "destino": "X6",
+        "peso": 0.526
+      },
+      {
+        "origem": "E",
+        "destino": "X11",
+        "peso": 0.166
+      },
+      {
+        "origem": "F",
+        "destino": "X8",
+        "peso": 0.379
+      },
+      {
+        "origem": "F",
+        "destino": "X9",
+        "peso": 0.481
+      },
+      {
+        "origem": "X1",
+        "destino": "X7",
+        "peso": 0.753
+      },
+      {
+        "origem": "X2",
+        "destino": "X3",
+        "peso": 0.86
+      },
+      {
+        "origem": "X2",
+        "destino": "X21",
+        "peso": 0.225
+      },
+      {
+        "origem": "X3",
+        "destino": "X4",
+        "peso": 0.454
+      },
+      {
+        "origem": "X3",
+        "destino": "X5",
+        "peso": 0.393
+      },
+      {
+        "origem": "X4",
+        "destino": "X6",
+        "peso": 0.393
+      },
+      {
+        "origem": "X5",
+        "destino": "X6",
+        "peso": 0.454
+      },
+      {
+        "origem": "X5",
+        "destino": "X9",
+        "peso": 0.36
+      },
+      {
+        "origem": "X7",
+        "destino": "X8",
+        "peso": 0.589
+      },
+      {
+        "origem": "X8",
+        "destino": "X22",
+        "peso": 0.322
+      },
+      {
+        "origem": "X8",
+        "destino": "X13",
+        "peso": 0.731
+      },
+      {
+        "origem": "X9",
+        "destino": "X10",
+        "peso": 0.332
+      },
+      {
+        "origem": "X10",
+        "destino": "X11",
+        "peso": 0.454
+      },
+      {
+        "origem": "X10",
+        "destino": "X15",
+        "peso": 0.399
+      },
+      {
+        "origem": "X11",
+        "destino": "X16",
+        "peso": 0.399
+      },
+      {
+        "origem": "X12",
+        "destino": "X13",
+        "peso": 0.589
+      },
+      {
+        "origem": "X12",
+        "destino": "X17",
+        "peso": 0.647
+      },
+      {
+        "origem": "X13",
+        "destino": "X18",
+        "peso": 0.647
+      },
+      {
+        "origem": "X14",
+        "destino": "X15",
+        "peso": 0.249
+      },
+      {
+        "origem": "X14",
+        "destino": "X19",
+        "peso": 0.647
+      },
+      {
+        "origem": "X15",
+        "destino": "X16",
+        "peso": 0.454
+      },
+      {
+        "origem": "X17",
+        "destino": "X18",
+        "peso": 0.589
+      },
+      {
+        "origem": "X18",
+        "destino": "X19",
+        "peso": 0.611
+      },
+      {
+        "origem": "X21",
+        "destino": "X22",
+        "peso": 0.206
+      },
+      {
+        "origem": "X21",
+        "destino": "X23",
+        "peso": 0.165
+      },
+      {
+        "origem": "X22",
+        "destino": "X24",
+        "peso": 0.165
+      },
+      {
+        "origem": "X23",
+        "destino": "X24",
+        "peso": 0.206
+      }
+    ]
+  },
+  "editor_3d": {
+    "posicoes": {
+      "A": [
+        -1.18,
+        -0.006227047208837454,
+        1.549
+      ],
+      "B": [
+        0.15,
+        -0.006227047208837454,
+        -0.582
+      ],
+      "C": [
+        -1.468,
+        -0.006227047208837454,
+        0.4
+      ],
+      "D": [
+        -0.55,
+        -0.006227047208837454,
+        0.065
+      ],
+      "E": [
+        0.435,
+        -0.006227047208837454,
+        0.63
+      ],
+      "F": [
+        -0.5,
+        -0.006227047208837454,
+        0.796
+      ],
+      "X1": [
+        -1.468,
+        -0.006227047208837454,
+        1.549
+      ],
+      "X10": [
+        -0.019,
+        -0.006227047208837454,
+        0.464
+      ],
+      "X11": [
+        0.435,
+        -0.006227047208837454,
+        0.464
+      ],
+      "X12": [
+        -1.468,
+        -0.006227047208837454,
+        0.065
+      ],
+      "X13": [
+        -0.879,
+        -0.006227047208837454,
+        0.065
+      ],
+      "X14": [
+        -0.268,
+        -0.006227047208837454,
+        0.065
+      ],
+      "X15": [
+        -0.019,
+        -0.006227047208837454,
+        0.065
+      ],
+      "X16": [
+        0.435,
+        -0.006227047208837454,
+        0.065
+      ],
+      "X17": [
+        -1.468,
+        -0.006227047208837454,
+        -0.582
+      ],
+      "X18": [
+        -0.879,
+        -0.006227047208837454,
+        -0.582
+      ],
+      "X19": [
+        -0.268,
+        -0.006227047208837454,
+        -0.582
+      ],
+      "X2": [
+        -0.879,
+        -0.006227047208837454,
+        1.549
+      ],
+      "X20": [
+        0.435,
+        -0.006227047208837454,
+        -0.582
+      ],
+      "X21": [
+        -0.879,
+        -0.006227047208837454,
+        1.324
+      ],
+      "X22": [
+        -0.879,
+        -0.006227047208837454,
+        1.118
+      ],
+      "X23": [
+        -1.044,
+        -0.006227047208837454,
+        1.324
+      ],
+      "X24": [
+        -1.044,
+        -0.006227047208837454,
+        1.118
+      ],
+      "X3": [
+        -0.019,
+        -0.006227047208837454,
+        1.549
+      ],
+      "X4": [
+        0.435,
+        -0.006227047208837454,
+        1.549
+      ],
+      "X5": [
+        -0.019,
+        -0.006227047208837454,
+        1.156
+      ],
+      "X6": [
+        0.435,
+        -0.006227047208837454,
+        1.156
+      ],
+      "X7": [
+        -1.468,
+        -0.006227047208837454,
+        0.796
+      ],
+      "X8": [
+        -0.879,
+        -0.006227047208837454,
+        0.796
+      ],
+      "X9": [
+        -0.019,
+        -0.006227047208837454,
+        0.796
+      ]
+    },
+    "ruas": [
+      {
+        "origem": "A",
+        "destino": "X1",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "A",
+        "destino": "X2",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "B",
+        "destino": "X19",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "B",
+        "destino": "X20",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "C",
+        "destino": "X12",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "C",
+        "destino": "X7",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "D",
+        "destino": "X13",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "D",
+        "destino": "X14",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "E",
+        "destino": "X11",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "E",
+        "destino": "X6",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "F",
+        "destino": "X8",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "F",
+        "destino": "X9",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X1",
+        "destino": "X7",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X10",
+        "destino": "X11",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X10",
+        "destino": "X15",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X10",
+        "destino": "X9",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X11",
+        "destino": "X16",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X12",
+        "destino": "X13",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X12",
+        "destino": "X17",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X13",
+        "destino": "X18",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X13",
+        "destino": "X8",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X14",
+        "destino": "X15",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X14",
+        "destino": "X19",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X15",
+        "destino": "X16",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X17",
+        "destino": "X18",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X18",
+        "destino": "X19",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X2",
+        "destino": "X21",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X2",
+        "destino": "X3",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X21",
+        "destino": "X22",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X21",
+        "destino": "X23",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X22",
+        "destino": "X24",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X22",
+        "destino": "X8",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X23",
+        "destino": "X24",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X3",
+        "destino": "X4",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X3",
+        "destino": "X5",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X4",
+        "destino": "X6",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X5",
+        "destino": "X6",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X5",
+        "destino": "X9",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X7",
+        "destino": "X8",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      }
+    ],
+    "superficies": {
+      "wh_plane_0|plane": "rua",
+      "wh_white.001_0|white.001": "calcada"
+    },
+    "fator_km_por_unidade": 1.0
+  }
+}

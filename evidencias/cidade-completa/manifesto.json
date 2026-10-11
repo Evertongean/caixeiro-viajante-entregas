@@ -1,0 +1,52 @@
+{
+  "cenario": "delivery-route-cidade-completa.json",
+  "backend": "OpenGL",
+  "renderizacao_real": true,
+  "modelos_visiveis": true,
+  "marcadores": 30,
+  "segmentos_ruas": 39,
+  "segmentos_tsp": 24,
+  "ordem_tsp": [
+    "D",
+    "B",
+    "E",
+    "F",
+    "A",
+    "C",
+    "D"
+  ],
+  "distancia_tsp": 9.235999999999999,
+  "captura_missao": {
+    "estado_na_imagem": "em_movimento",
+    "distancia_percorrida_na_imagem": 0.5616,
+    "camera": "atras_do_carro"
+  },
+  "missao_completa": {
+    "estado": "concluida",
+    "entregas": "5/5",
+    "painel": "5 / 5",
+    "retornou_ao_deposito": true
+  },
+  "evidencias": [
+    {
+      "imagem": "01-cidade-completa.png",
+      "descricao": "Cidade, cruzamentos e malha completa."
+    },
+    {
+      "imagem": "02-clientes-e-deposito.png",
+      "descricao": "Cinco clientes e depósito, sem rótulos de cruzamentos."
+    },
+    {
+      "imagem": "03-rede-de-ruas.png",
+      "descricao": "Vista aérea ortogonal da cobertura viária."
+    },
+    {
+      "imagem": "04-rota-tsp.png",
+      "descricao": "Rota TSP exata destacada e cinco entregas."
+    },
+    {
+      "imagem": "05-missao-camera-carro.png",
+      "descricao": "Carro em movimento com câmera de perseguição."
+    }
+  ]
+}
