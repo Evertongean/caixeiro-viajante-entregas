@@ -664,7 +664,23 @@ class JanelaPrincipal(QMainWindow):
             self._mostrar_erro(motivo)
             return
         try:
-            controlador = ControladorMissao(self.rota_calculada)
+            estacionamento = self.projeto.estacionamento_inicial
+            usar_estacionamento = (
+                estacionamento is not None
+                and estacionamento.validado
+                and self.rota_calculada.origem == estacionamento.deposito
+            )
+            controlador = ControladorMissao(
+                self.rota_calculada,
+                posicao_inicial=(
+                    estacionamento.posicao if usar_estacionamento else None
+                ),
+                orientacao_inicial_graus=(
+                    estacionamento.orientacao_graus
+                    if usar_estacionamento
+                    else None
+                ),
+            )
             controlador.multiplicador_velocidade = float(
                 self.seletor_velocidade.currentData()
             )
@@ -734,6 +750,7 @@ class JanelaPrincipal(QMainWindow):
             self._apresentar_rota(self.rota_calculada)
         if resumo is not None:
             self.resumo_missao.setText(self._texto_resumo_missao(resumo))
+        self._aplicar_pose_estacionamento()
         self.cartao_status.definir("Missão encerrada; edição liberada.")
 
     def _velocidade_missao_alterada(self, _indice: int = -1) -> None:
@@ -1008,7 +1025,42 @@ class JanelaPrincipal(QMainWindow):
         self.botao_limpar_rota.setEnabled(False)
         self.botao_enquadrar_rota.setEnabled(False)
         self.resumo_missao.setText("Calcule e calibre uma rota para iniciar.")
+        self._aplicar_pose_estacionamento()
         self._atualizar_controles_missao()
+
+    def _aplicar_pose_estacionamento(self) -> bool:
+        estacionamento = self.projeto.estacionamento_inicial
+        if estacionamento is None or not estacionamento.validado:
+            return False
+        self.visualizacao.atualizar_carro(
+            estacionamento.posicao,
+            estacionamento.orientacao_graus,
+            0.0,
+            imediato=True,
+        )
+        return True
+
+    def _resolver_pose_estacionamento(self) -> bool:
+        if not self.visualizacao.modelos_preparados:
+            return False
+        anterior = self.projeto.estacionamento_inicial
+        try:
+            estacionamento = self.visualizacao.posicionar_estacionamento(
+                self.projeto
+            )
+        except (OSError, TypeError, ValueError, RuntimeError) as erro:
+            LOGGER.warning("Estacionamento inicial indisponível: %s", erro)
+            self._definir_instrucao(
+                "Não foi possível validar o estacionamento inicial: " + str(erro)
+            )
+            return False
+        if anterior is None:
+            self._definir_projeto_modificado(True)
+        self._definir_instrucao(
+            f"Carro estacionado sobre {estacionamento.superficie}, "
+            f"associado ao depósito {estacionamento.deposito}."
+        )
+        return True
 
     def _invalidar_rota_por_edicao(self) -> None:
         self._definir_projeto_modificado(True)
@@ -1643,6 +1695,7 @@ class JanelaPrincipal(QMainWindow):
         except (OSError, TypeError, ValueError, ErroPersistencia) as erro:
             self._mostrar_erro(f"Não foi possível abrir o projeto: {erro}")
             return False
+        tinha_estacionamento = carregado.estacionamento_inicial is not None
         self.projeto = carregado
         self.grafo = carregado.grafo
         self.editor = EditorCidade3D(carregado)
@@ -1654,8 +1707,12 @@ class JanelaPrincipal(QMainWindow):
         self._atualizando_campos_rota = False
         self._inicializar_posicoes_legadas()
         self._sincronizar_cena()
+        self._resolver_pose_estacionamento()
         self._modo_navegar()
-        self._definir_projeto_modificado(False)
+        self._definir_projeto_modificado(
+            not tinha_estacionamento
+            and self.projeto.estacionamento_inicial is not None
+        )
         self._definir_instrucao(f"Projeto {self.caminho_projeto.name} carregado.")
         return True
 
@@ -1762,6 +1819,7 @@ class JanelaPrincipal(QMainWindow):
                 self._editor_inicializado = True
                 self._inicializar_posicoes_legadas()
                 self._sincronizar_cena()
+                self._resolver_pose_estacionamento()
                 self._modo_navegar()
                 if self.rota_calculada is None:
                     self.limpar_rota()

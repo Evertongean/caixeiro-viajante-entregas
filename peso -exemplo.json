@@ -1,0 +1,167 @@
+{
+  "formato": "delivery-route-cidade-3d",
+  "versao": 1,
+  "modelos": {
+    "cidade": "assets/models/cidade.glb",
+    "carro": "assets/models/carro.glb"
+  },
+  "grafo": {
+    "formato": "delivery-route-grafo",
+    "versao": 1,
+    "deposito": "D1",
+    "vertices": [
+      {
+        "identificador": "X1",
+        "nome": "vertece1",
+        "tipo": "cruzamento",
+        "x": -0.8696401119232178,
+        "y": 0.7993009686470032
+      },
+      {
+        "identificador": "X2",
+        "nome": "vertece2",
+        "tipo": "cruzamento",
+        "x": -0.03135906904935837,
+        "y": 0.7972913980484009
+      },
+      {
+        "identificador": "X3",
+        "nome": "vertece3",
+        "tipo": "cruzamento",
+        "x": -0.021030452102422714,
+        "y": 0.0735824927687645
+      },
+      {
+        "identificador": "X4",
+        "nome": "vertece4",
+        "tipo": "cruzamento",
+        "x": -0.8793548345565796,
+        "y": 0.06829061359167099
+      },
+      {
+        "identificador": "D1",
+        "nome": "deposito",
+        "tipo": "depósito",
+        "x": 0.4246453046798706,
+        "y": 0.07247832417488098
+      },
+      {
+        "identificador": "C1",
+        "nome": "cliente",
+        "tipo": "cliente",
+        "x": -1.3652901649475098,
+        "y": 0.79276043176651
+      }
+    ],
+    "arestas": [
+      {
+        "origem": "X1",
+        "destino": "X4",
+        "peso": 4.0
+      },
+      {
+        "origem": "X1",
+        "destino": "X2",
+        "peso": 4.0
+      },
+      {
+        "origem": "X1",
+        "destino": "C1",
+        "peso": 4.0
+      },
+      {
+        "origem": "X2",
+        "destino": "X3",
+        "peso": 2.0
+      },
+      {
+        "origem": "X3",
+        "destino": "X4",
+        "peso": 4.0
+      },
+      {
+        "origem": "X3",
+        "destino": "D1",
+        "peso": 2.0
+      }
+    ]
+  },
+  "editor_3d": {
+    "posicoes": {
+      "C1": [
+        -1.3652901649475098,
+        -0.00622704578563571,
+        0.79276043176651
+      ],
+      "D1": [
+        0.4246453046798706,
+        -0.0062270453199744225,
+        0.07247832417488098
+      ],
+      "X1": [
+        -0.8696401119232178,
+        -0.006227046251296997,
+        0.7993009686470032
+      ],
+      "X2": [
+        -0.03135906904935837,
+        -0.00622704578563571,
+        0.7972913980484009
+      ],
+      "X3": [
+        -0.021030452102422714,
+        -0.0062270453199744225,
+        0.0735824927687645
+      ],
+      "X4": [
+        -0.8793548345565796,
+        -0.00622704578563571,
+        0.06829061359167099
+      ]
+    },
+    "ruas": [
+      {
+        "origem": "C1",
+        "destino": "X1",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X3",
+        "destino": "D1",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X1",
+        "destino": "X2",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X4",
+        "destino": "X1",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X2",
+        "destino": "X3",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      },
+      {
+        "origem": "X3",
+        "destino": "X4",
+        "pontos_intermediarios": [],
+        "calibrada_manualmente": true
+      }
+    ],
+    "superficies": {
+      "Cube.025_keremi_0|keremi": "bloqueada",
+      "wh_plane_0|plane": "rua",
+      "wh_white.001_0|white.001": "calcada"
+    },
+    "fator_km_por_unidade": 4.0
+  }
+}

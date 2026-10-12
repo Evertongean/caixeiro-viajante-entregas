@@ -11,6 +11,9 @@ from PySide6.QtCore import QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuickWidgets import QQuickWidget
 
+from models.estacionamento import DimensoesVeiculo, resolver_estacionamento
+from models.projeto_cidade import EstacionamentoVeiculo, ProjetoCidade
+
 from .assets_3d import (
     ESCALA_CARRO_PADRAO,
     ESCALA_CIDADE_PADRAO,
@@ -18,6 +21,7 @@ from .assets_3d import (
     ErroModelo3D,
     InformacoesModelo3D,
     caminho_modelo,
+    extrair_mapa_superficies,
     inspecionar_modelo,
 )
 from .camera_orbital import CameraOrbital, ModoCamera
@@ -27,6 +31,7 @@ from .camera_seguidora import CameraSeguidora
 # O GLB foi inspecionado por malha/material: grade e para-choque dianteiros
 # estão no extremo -Z. O yaw da rota usa +Z como zero, logo o asset requer 180°.
 CORRECAO_FRONTAL_CARRO_GRAUS = 180.0
+FOLGA_PAVIMENTO_CARRO = 0.00025
 
 
 class ErroRenderizacao3D(RuntimeError):
@@ -208,10 +213,37 @@ class Visualizacao3D(QQuickWidget):
             raiz.setProperty("posicaoCarro", QVector3D(*self.posicao_carro))
             raiz.setProperty("centroModeloCarro", QVector3D(*carro.centro))
             raiz.setProperty("minimoModeloCarro", QVector3D(*carro.minimo))
-            raiz.setProperty("alturaCarro", 0.008)
+            raiz.setProperty("alturaCarro", FOLGA_PAVIMENTO_CARRO)
             self.atualizar_carro(
                 self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
             )
+
+    def posicionar_estacionamento(
+        self, projeto: ProjetoCidade
+    ) -> EstacionamentoVeiculo:
+        """Resolve a vaga pela malha real e aplica a pose antes da missão."""
+        if self.info_carro is None:
+            raise ErroRenderizacao3D("O modelo do carro ainda não foi inspecionado.")
+        mapa = extrair_mapa_superficies(
+            self.caminho_cidade,
+            projeto.superficies,
+            escala=self.escala_cidade,
+        )
+        dimensoes_modelo = self.info_carro.limites.dimensoes
+        dimensoes = DimensoesVeiculo(
+            largura=dimensoes_modelo[0] * self.escala_carro,
+            altura=dimensoes_modelo[1] * self.escala_carro,
+            comprimento=dimensoes_modelo[2] * self.escala_carro,
+        )
+        estacionamento = resolver_estacionamento(projeto, mapa, dimensoes)
+        projeto.estacionamento_inicial = estacionamento
+        self.atualizar_carro(
+            estacionamento.posicao,
+            estacionamento.orientacao_graus,
+            0.0,
+            imediato=True,
+        )
+        return estacionamento
 
     def _aplicar_camera(self) -> None:
         raiz = self.rootObject()

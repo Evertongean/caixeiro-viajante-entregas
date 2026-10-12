@@ -15,6 +15,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Sequence
 
+from models.projeto_cidade import ClassificacaoSuperficie
+
 
 ESCALA_CIDADE_PADRAO = 0.01
 ESCALA_CARRO_PADRAO = 0.018
@@ -58,6 +60,64 @@ class AssetConvertido:
     qml: Path
     diretorio: Path
     veio_do_cache: bool
+
+
+Triangulo3D = tuple[
+    tuple[float, float, float],
+    tuple[float, float, float],
+    tuple[float, float, float],
+]
+
+
+@dataclass(frozen=True, slots=True)
+class AmostraSuperficie:
+    referencia: str
+    classificacao: ClassificacaoSuperficie
+    altura: float
+
+
+@dataclass(frozen=True, slots=True)
+class MapaSuperficies3D:
+    """Triângulos reais das superfícies semanticamente classificadas do GLB."""
+
+    triangulos: dict[str, tuple[Triangulo3D, ...]]
+    classificacoes: dict[str, ClassificacaoSuperficie]
+
+    @staticmethod
+    def _altura_triangulo(
+        triangulo: Triangulo3D, x: float, z: float
+    ) -> float | None:
+        a, b, c = triangulo
+        abx, abz = b[0] - a[0], b[2] - a[2]
+        acx, acz = c[0] - a[0], c[2] - a[2]
+        apx, apz = x - a[0], z - a[2]
+        denominador = abx * acz - abz * acx
+        if abs(denominador) <= 1e-12:
+            return None
+        u = (apx * acz - apz * acx) / denominador
+        v = (abx * apz - abz * apx) / denominador
+        if u < -1e-8 or v < -1e-8 or u + v > 1.0 + 1e-8:
+            return None
+        return a[1] + u * (b[1] - a[1]) + v * (c[1] - a[1])
+
+    def amostrar(self, x: float, z: float) -> AmostraSuperficie | None:
+        """Retorna a superfície classificada visível mais alta nesse ponto."""
+        melhor: AmostraSuperficie | None = None
+        for referencia, triangulos in self.triangulos.items():
+            alturas = (
+                altura
+                for triangulo in triangulos
+                if (altura := self._altura_triangulo(triangulo, x, z)) is not None
+            )
+            altura = max(alturas, default=None)
+            if altura is None:
+                continue
+            amostra = AmostraSuperficie(
+                referencia, self.classificacoes[referencia], altura
+            )
+            if melhor is None or amostra.altura > melhor.altura:
+                melhor = amostra
+        return melhor
 
 
 Matriz = tuple[tuple[float, float, float, float], ...]
@@ -133,6 +193,159 @@ def _ler_documento_glb(caminho: Path) -> dict[str, Any]:
     if not isinstance(documento, dict):
         raise ErroModelo3D(f"O documento interno de {caminho.name} é inválido.")
     return documento
+
+
+def _ler_glb(caminho: Path) -> tuple[dict[str, Any], bytes]:
+    documento = _ler_documento_glb(caminho)
+    dados = caminho.read_bytes()
+    comprimento_json = struct.unpack_from("<I", dados, 12)[0]
+    inicio = 20 + comprimento_json
+    inicio += (-inicio) % 4
+    if inicio + 8 > len(dados):
+        raise ErroModelo3D(f"{caminho.name} não possui bloco binário.")
+    comprimento_binario, tipo = struct.unpack_from("<II", dados, inicio)
+    if tipo != 0x004E4942 or inicio + 8 + comprimento_binario > len(dados):
+        raise ErroModelo3D(f"O bloco binário de {caminho.name} é inválido.")
+    return documento, dados[inicio + 8 : inicio + 8 + comprimento_binario]
+
+
+_FORMATOS_COMPONENTE = {
+    5120: "b",
+    5121: "B",
+    5122: "h",
+    5123: "H",
+    5125: "I",
+    5126: "f",
+}
+_COMPONENTES_TIPO = {
+    "SCALAR": 1,
+    "VEC2": 2,
+    "VEC3": 3,
+    "VEC4": 4,
+}
+
+
+def _ler_acessor(
+    documento: dict[str, Any], bloco: bytes, indice: int
+) -> list[tuple[float, ...]]:
+    try:
+        acessor = documento["accessors"][indice]
+        vista = documento["bufferViews"][acessor["bufferView"]]
+        formato = _FORMATOS_COMPONENTE[acessor["componentType"]]
+        componentes = _COMPONENTES_TIPO[acessor["type"]]
+        quantidade = int(acessor["count"])
+    except (KeyError, IndexError, TypeError, ValueError) as erro:
+        raise ErroModelo3D("Um acessor do GLB é incompatível.") from erro
+    formato_item = "<" + formato * componentes
+    tamanho_item = struct.calcsize(formato_item)
+    passo = int(vista.get("byteStride", tamanho_item))
+    inicio = int(vista.get("byteOffset", 0)) + int(acessor.get("byteOffset", 0))
+    if passo < tamanho_item or inicio < 0:
+        raise ErroModelo3D("Um acessor do GLB possui deslocamento inválido.")
+    resultado: list[tuple[float, ...]] = []
+    try:
+        for item in range(quantidade):
+            valores = struct.unpack_from(formato_item, bloco, inicio + item * passo)
+            resultado.append(tuple(float(valor) for valor in valores))
+    except struct.error as erro:
+        raise ErroModelo3D("Um acessor ultrapassa o bloco binário do GLB.") from erro
+    return resultado
+
+
+def extrair_mapa_superficies(
+    caminho: str | os.PathLike[str],
+    classificacoes: dict[str, ClassificacaoSuperficie],
+    *,
+    escala: float = ESCALA_CIDADE_PADRAO,
+) -> MapaSuperficies3D:
+    """Extrai somente as malhas classificadas, com transformações reais dos nós."""
+    if not isinstance(escala, (int, float)) or escala <= 0:
+        raise ValueError("A escala da cidade deve ser positiva.")
+    caminho_path = Path(caminho).expanduser().resolve()
+    documento, bloco = _ler_glb(caminho_path)
+    nos = documento.get("nodes", [])
+    malhas = documento.get("meshes", [])
+    materiais = documento.get("materials", [])
+    pais = {
+        filho: indice
+        for indice, no in enumerate(nos)
+        if isinstance(no, dict)
+        for filho in no.get("children", [])
+        if isinstance(filho, int)
+    }
+
+    def matriz_mundo(indice: int) -> Matriz:
+        cadeia: list[int] = []
+        atual = indice
+        while True:
+            cadeia.append(atual)
+            if atual not in pais:
+                break
+            atual = pais[atual]
+        matriz = _identidade()
+        for item in reversed(cadeia):
+            matriz = _multiplicar(matriz, _matriz_no(nos[item]))
+        return matriz
+
+    encontrados: dict[str, list[Triangulo3D]] = {
+        referencia: [] for referencia in classificacoes
+    }
+    for indice_no, no in enumerate(nos):
+        if not isinstance(no, dict) or not isinstance(no.get("mesh"), int):
+            continue
+        indice_malha = no["mesh"]
+        if not 0 <= indice_malha < len(malhas):
+            continue
+        nome_no = str(no.get("name", ""))
+        matriz = matriz_mundo(indice_no)
+        for primitiva in malhas[indice_malha].get("primitives", []):
+            if not isinstance(primitiva, dict) or primitiva.get("mode", 4) != 4:
+                continue
+            indice_material = primitiva.get("material")
+            nome_material = ""
+            if (
+                isinstance(indice_material, int)
+                and 0 <= indice_material < len(materiais)
+                and isinstance(materiais[indice_material], dict)
+            ):
+                nome_material = str(materiais[indice_material].get("name", ""))
+            referencia = f"{nome_no}|{nome_material}"
+            if referencia not in encontrados:
+                continue
+            atributos = primitiva.get("attributes", {})
+            indice_posicao = atributos.get("POSITION") if isinstance(atributos, dict) else None
+            if not isinstance(indice_posicao, int):
+                continue
+            vertices = [
+                tuple(coordenada * float(escala) for coordenada in _transformar(matriz, ponto))
+                for ponto in _ler_acessor(documento, bloco, indice_posicao)
+            ]
+            if isinstance(primitiva.get("indices"), int):
+                indices = [
+                    int(item[0])
+                    for item in _ler_acessor(documento, bloco, primitiva["indices"])
+                ]
+            else:
+                indices = list(range(len(vertices)))
+            for inicio in range(0, len(indices) - 2, 3):
+                try:
+                    triangulo = (
+                        vertices[indices[inicio]],
+                        vertices[indices[inicio + 1]],
+                        vertices[indices[inicio + 2]],
+                    )
+                except IndexError as erro:
+                    raise ErroModelo3D("Uma primitiva referencia vértice inexistente.") from erro
+                encontrados[referencia].append(triangulo)
+    ausentes = [referencia for referencia, itens in encontrados.items() if not itens]
+    if ausentes:
+        raise ErroModelo3D(
+            "Superfícies classificadas não encontradas no GLB: " + ", ".join(ausentes)
+        )
+    return MapaSuperficies3D(
+        triangulos={chave: tuple(valor) for chave, valor in encontrados.items()},
+        classificacoes=dict(classificacoes),
+    )
 
 
 def _limites_documento(documento: dict[str, Any]) -> Limites3D:
@@ -338,12 +551,15 @@ class ConversorBalsam:
 
 __all__ = [
     "AssetConvertido",
+    "AmostraSuperficie",
     "ConversorBalsam",
     "ErroModelo3D",
     "ESCALA_CARRO_PADRAO",
     "ESCALA_CIDADE_PADRAO",
     "InformacoesModelo3D",
     "Limites3D",
+    "MapaSuperficies3D",
     "caminho_modelo",
+    "extrair_mapa_superficies",
     "inspecionar_modelo",
 ]

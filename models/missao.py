@@ -75,6 +75,7 @@ class _TrechoMovimento:
     inicio: Ponto3D
     fim: Ponto3D
     comprimento: float
+    transicao_estacionamento: bool = False
 
 
 def _distancia(a: Ponto3D, b: Ponto3D) -> float:
@@ -109,6 +110,8 @@ class ControladorMissao:
         velocidade_base: float = 0.18,
         tempo_parada_entrega: float = 1.0,
         velocidade_rotacao: float = 240.0,
+        posicao_inicial: Ponto3D | None = None,
+        orientacao_inicial_graus: float | None = None,
     ) -> None:
         if not isinstance(rota, RotaCalculada):
             raise TypeError("É necessário fornecer uma RotaCalculada.")
@@ -157,6 +160,37 @@ class ControladorMissao:
                 )
             self._comprimentos_arestas.append(comprimento_aresta)
 
+        inicio_rota = self._trechos[0].inicio
+        self._posicao_inicial = (
+            tuple(float(valor) for valor in posicao_inicial)
+            if posicao_inicial is not None
+            else inicio_rota
+        )
+        if len(self._posicao_inicial) != 3 or not all(
+            isfinite(valor) for valor in self._posicao_inicial
+        ):
+            raise ValueError("A posição inicial deve possuir três coordenadas finitas.")
+        orientacao_rota = _angulo_movimento(inicio_rota, self._trechos[0].fim)
+        self._orientacao_inicial = (
+            float(orientacao_inicial_graus)
+            if orientacao_inicial_graus is not None
+            else orientacao_rota
+        )
+        if not isfinite(self._orientacao_inicial):
+            raise ValueError("A orientação inicial deve ser finita.")
+        distancia_transicao = _distancia(self._posicao_inicial, inicio_rota)
+        if distancia_transicao > 1e-12:
+            self._trechos.insert(
+                0,
+                _TrechoMovimento(
+                    0,
+                    self._posicao_inicial,
+                    inicio_rota,
+                    distancia_transicao,
+                    True,
+                ),
+            )
+
         self._clientes_programados = tuple(
             identificador
             for identificador in rota.ordem_atendimento
@@ -189,9 +223,8 @@ class ControladorMissao:
         self._clientes_atendidos: list[str] = []
         self._espera_restante = 0.0
         self.tempo_decorrido = 0.0
-        primeiro = self._trechos[0]
-        self.posicao = primeiro.inicio
-        self.orientacao_graus = _angulo_movimento(primeiro.inicio, primeiro.fim)
+        self.posicao = self._posicao_inicial
+        self.orientacao_graus = self._orientacao_inicial
 
     def iniciar(self) -> QuadroMissao:
         if self.estado is not EstadoMissao.PRONTA:
@@ -224,6 +257,8 @@ class ControladorMissao:
 
     def encerrar(self) -> QuadroMissao:
         self.estado = EstadoMissao.ENCERRADA
+        self.posicao = self._posicao_inicial
+        self.orientacao_graus = self._orientacao_inicial
         return self.quadro()
 
     def _indice_aresta_atual(self) -> int:
@@ -308,7 +343,8 @@ class ControladorMissao:
             self._distancia_no_trecho = min(
                 trecho.comprimento, self._distancia_no_trecho + deslocamento
             )
-            self._geometria_na_aresta += deslocamento
+            if not trecho.transicao_estacionamento:
+                self._geometria_na_aresta += deslocamento
             proporcao = self._distancia_no_trecho / trecho.comprimento
             self.posicao = _interpolar(trecho.inicio, trecho.fim, proporcao)
             alvo = _angulo_movimento(trecho.inicio, trecho.fim)
@@ -332,6 +368,8 @@ class ControladorMissao:
             )
             self._indice_trecho = proximo_indice
             self._distancia_no_trecho = 0.0
+            if trecho.transicao_estacionamento:
+                continue
             if terminou_aresta:
                 segmento = self.rota.segmentos_espaciais[indice_aresta_concluida]
                 self._distancia_oficial_anterior += segmento.peso

@@ -11,6 +11,7 @@ from models.grafo import Grafo, TipoVertice
 from models.persistencia import salvar_grafo
 from models.projeto_cidade import (
     ClassificacaoSuperficie,
+    EstacionamentoVeiculo,
     FORMATO_PROJETO_CIDADE,
     ProjetoCidade,
     carregar_projeto_cidade,
@@ -31,6 +32,13 @@ class TestProjetoCidade(unittest.TestCase):
         editor.adicionar_ponto_intermediario((3, 0.1, 4))
         editor.confirmar_rua(2.75, 0.125)
         projeto.superficies["Object_9|plane"] = ClassificacaoSuperficie.RUA
+        projeto.estacionamento_inicial = EstacionamentoVeiculo(
+            deposito="D",
+            posicao=(1, 0.1, 2),
+            orientacao_graus=45.0,
+            superficie="Object_9|plane",
+            validado=True,
+        )
         return projeto
 
     def test_round_trip_preserva_grafo_e_metadados_espaciais(self) -> None:
@@ -50,6 +58,8 @@ class TestProjetoCidade(unittest.TestCase):
             carregado.superficies["Object_9|plane"], ClassificacaoSuperficie.RUA
         )
         self.assertEqual(carregado.fator_km_por_unidade, 0.125)
+        self.assertEqual(carregado.estacionamento_inicial.deposito, "D")
+        self.assertEqual(carregado.estacionamento_inicial.orientacao_graus, 45.0)
 
     def test_json_referencia_modelos_sem_incorporar_binarios(self) -> None:
         dados = projeto_para_dados(self.criar_projeto())
@@ -69,6 +79,7 @@ class TestProjetoCidade(unittest.TestCase):
         self.assertEqual(carregado.posicoes, {})
         self.assertEqual(carregado.ruas, {})
         self.assertEqual(carregado.superficies, {})
+        self.assertIsNone(carregado.estacionamento_inicial)
 
     def test_normaliza_rua_legada_duplicada_nos_dois_sentidos(self) -> None:
         dados = projeto_para_dados(self.criar_projeto())

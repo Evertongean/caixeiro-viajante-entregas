@@ -156,6 +156,32 @@ class TestControladorMissao(unittest.TestCase):
         with self.assertRaisesRegex(ErroMissao, "comprimento espacial"):
             ControladorMissao(sem_movimento)
 
+    def test_transicao_da_vaga_ate_rota_e_continua_e_nao_altera_distancia(self) -> None:
+        rota = criar_rota([("D", "A", 2, ((0, 0, 0), (2, 0, 0)))])
+        missao = ControladorMissao(
+            rota,
+            velocidade_base=1.0,
+            posicao_inicial=(-0.5, 0, 0),
+            orientacao_inicial_graus=90.0,
+        )
+        self.assertEqual(missao.quadro().posicao, (-0.5, 0.0, 0.0))
+        missao.iniciar()
+        transicao = missao.avancar(0.25)
+        self.assertEqual(transicao.posicao, (-0.25, 0.0, 0.0))
+        self.assertEqual(transicao.distancia_percorrida, 0.0)
+        entrada = missao.avancar(0.5)
+        self.assertEqual(entrada.posicao, (0.25, 0.0, 0.0))
+        self.assertAlmostEqual(entrada.distancia_percorrida, 0.25)
+        reinicio = missao.reiniciar(iniciar=False)
+        self.assertEqual(reinicio.posicao, (-0.5, 0.0, 0.0))
+        self.assertEqual(reinicio.orientacao_graus, 90.0)
+        missao.iniciar()
+        missao.avancar(0.2)
+        encerrada = missao.encerrar()
+        self.assertEqual(encerrada.estado, EstadoMissao.ENCERRADA)
+        self.assertEqual(encerrada.posicao, (-0.5, 0.0, 0.0))
+        self.assertEqual(encerrada.orientacao_graus, 90.0)
+
 
 class TestCameraSeguidora(unittest.TestCase):
     def test_fica_atras_da_direcao_real_e_suaviza_mudanca(self) -> None:

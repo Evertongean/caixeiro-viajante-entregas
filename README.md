@@ -241,6 +241,9 @@ escura como sucesso.
 - **Traçado espacial:** polilinha 3D ordenada entre os extremos, incluindo as
   curvas marcadas pelo usuário. Ela desenha o destaque e guia o carro, mas não
   altera por conta própria o peso oficial.
+- **Estacionamento inicial:** pose física opcional do carro, associada ao
+  depósito sem mover o vértice lógico. A pegada completa do `carro.glb` é
+  validada sobre os triângulos classificados como rua antes do uso.
 
 `models/grafo.py` mantém vértices, arestas, pesos e invariantes do grafo.
 `algorithms/dijkstra.py` parte da origem, relaxa as arestas com uma fila de
@@ -261,12 +264,17 @@ O cenário de demonstração confirma:
 
 Os botões **Salvar** e **Abrir** usam o formato versionado de
 `models/projeto_cidade.py`. Ele armazena o grafo, posições 3D, polilinhas,
-classificações manuais, fator de conversão e referências dos GLBs. Os binários
-dos modelos não são incorporados ao JSON. Arquivos antigos de
+classificações manuais, fator de conversão, referências dos GLBs e, quando
+disponível, `editor_3d.estacionamento_inicial`. Os binários dos modelos não são
+incorporados ao JSON. Arquivos antigos de
 `models/persistencia.py` continuam aceitos; seus vértices sem posição espacial
 recebem uma disposição inicial aproximada e podem ser reposicionados sobre
 ruas classificadas. O carregamento é transacional: um JSON inválido não
 substitui o projeto aberto.
+
+O cenário `delivery-route-cidade-completa-corrigida.json` mantém grafo, pesos e
+rede viária do original e acrescenta somente a vaga validada próxima a `D`.
+As capturas OpenGL ficam em `evidencias/estacionamento/`.
 
 ## Roteiro reproduzível de demonstração acadêmica
 

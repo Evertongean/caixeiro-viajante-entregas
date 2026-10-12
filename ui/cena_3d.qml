@@ -32,7 +32,8 @@ Item {
     property vector3d centroModeloCarro: Qt.vector3d(0, 0, 0)
     property vector3d minimoModeloCarro: Qt.vector3d(0, 0, 0)
     property real rotacaoCarro: 0.0
-    property real alturaCarro: 0.01
+    // Pequena folga anti-z-fighting; o mínimo Y real do GLB é rebatido abaixo.
+    property real alturaCarro: 0.00025
     property bool cidadePronta: cidadeLoader.item !== null
     property bool carroPronto: carroLoader.item !== null
     property int modelosProntos: (cidadePronta ? 1 : 0) + (carroPronto ? 1 : 0)
