@@ -149,6 +149,7 @@ class JanelaPrincipal(QMainWindow):
         self._colunas_cartoes = 0
         self._aguardando_insercao_curva = False
         self._arraste_superficie_valida = False
+        self._validacoes_ruas: dict[tuple[str, str], tuple[bool, bool, str]] = {}
 
         raiz = QWidget()
         raiz.setObjectName("raizAplicacao")
@@ -300,14 +301,16 @@ class JanelaPrincipal(QMainWindow):
         self.botao_adicionar_cliente = QPushButton("Adicionar cliente")
         self.botao_definir_deposito = QPushButton("Definir depósito")
         self.botao_criar_rua = QPushButton("Criar rua")
+        # Mantido apenas como adaptador de compatibilidade para projetos/testes
+        # antigos. Não integra mais a interface principal nem o fluxo normal.
         self.botao_classificar = QPushButton("Classificar superfície")
+        self.botao_classificar.hide()
         self.botoes_edicao = [
             self.botao_navegar,
             self.botao_adicionar_ponto,
             self.botao_adicionar_cliente,
             self.botao_definir_deposito,
             self.botao_criar_rua,
-            self.botao_classificar,
         ]
         self.grupo_ferramentas = QButtonGroup(self)
         self.grupo_ferramentas.setExclusive(True)
@@ -316,6 +319,8 @@ class JanelaPrincipal(QMainWindow):
             self.grupo_ferramentas.addButton(botao)
             botao.setEnabled(False)
             layout.addWidget(botao)
+        self.botao_classificar.setCheckable(True)
+        self.grupo_ferramentas.addButton(self.botao_classificar)
 
         self.estado_ferramenta = QLabel("Ferramenta ativa: aguardando a cena 3D")
         self.estado_ferramenta.setObjectName("estadoFerramenta")
@@ -616,6 +621,16 @@ class JanelaPrincipal(QMainWindow):
             return False, self._texto_ruas_pendentes(rota.arestas_pendentes)
         if not self.visualizacao.modelos_preparados:
             return False, "Aguarde o carregamento do carro e da cidade 3D."
+        if self.visualizacao.mapa_trafegabilidade is not None:
+            for segmento in rota.segmentos_espaciais:
+                validacao = self.visualizacao.validar_rua_automatica(segmento.pontos)
+                if not validacao.valido:
+                    estado = "inconclusiva" if not validacao.conclusivo else "inválida"
+                    return (
+                        False,
+                        f"Rua {segmento.origem} ↔ {segmento.destino} {estado}: "
+                        f"{validacao.motivo}",
+                    )
         return True, "Rota calibrada e pronta para iniciar."
 
     @staticmethod
@@ -1030,10 +1045,17 @@ class JanelaPrincipal(QMainWindow):
             texto = ", ".join(clientes_no_percurso) or "nenhum"
             self.resultado_clientes.setText(f"Clientes no percurso: {texto}")
         if rota.estado_espacial is EstadoEspacial.COMPLETO:
+            apta, motivo = self._rota_apta_para_missao()
             self.resultado_calibracao.setText(
-                "Todos os trechos possuem traçado espacial confirmado manualmente."
+                "Todos os trechos foram validados automaticamente no mapa viário."
+                if apta and self.visualizacao.mapa_trafegabilidade is not None
+                else motivo
             )
-            self.cartao_status.definir("Rota pronta para missão 3D.")
+            self.cartao_status.definir(
+                "Rota pronta para missão 3D."
+                if apta
+                else "Rota calculada; ajuste o traçado espacial."
+            )
         else:
             self.resultado_calibracao.setText(
                 self._texto_ruas_pendentes(rota.arestas_pendentes)
@@ -1195,7 +1217,7 @@ class JanelaPrincipal(QMainWindow):
         }.get(tipo, self.botao_adicionar_ponto)
         self._marcar_ferramenta(botao, botao.text())
         self._definir_instrucao(
-            "Clique sobre uma superfície previamente classificada como rua para "
+            "Clique sobre uma rua reconhecida automaticamente para "
             f"adicionar {descricao}. Cancelar volta à navegação."
         )
         self._atualizar_botoes_operacao()
@@ -1207,8 +1229,8 @@ class JanelaPrincipal(QMainWindow):
         self.visualizacao.definir_modo_interacao(ModoEditor.CRIAR_RUA.value)
         self._marcar_ferramenta(self.botao_criar_rua, "Criar rua")
         self._definir_instrucao(
-            "Selecione o ponto inicial e o final. Depois clique no asfalto para traçar "
-            "curvas; Desfazer remove a última etapa e Cancelar abandona a operação."
+            "Selecione o ponto inicial e o final. O sistema sugerirá um traçado sobre "
+            "a malha viária; ajuste as curvas se necessário."
         )
         self._sincronizar_cena()
         self._atualizar_botoes_operacao()
@@ -1280,8 +1302,11 @@ class JanelaPrincipal(QMainWindow):
         self.snap_editor.setEnabled(criando_rua)
 
     def _sincronizar_cena(self) -> None:
+        self._revalidar_ruas_automaticamente()
         self.visualizacao.atualizar_marcadores(self.editor.marcadores_qml())
-        self.visualizacao.atualizar_ruas(self.editor.segmentos_ruas_qml())
+        self.visualizacao.atualizar_ruas(
+            self.editor.segmentos_ruas_qml(self._validacoes_ruas)
+        )
         self.visualizacao.atualizar_previa_rua(
             self.editor.segmentos_previa_qml()
         )
@@ -1297,23 +1322,54 @@ class JanelaPrincipal(QMainWindow):
             )
         self._atualizar_campos_grafo()
         calibradas = sum(
+            estado[0] for estado in self._validacoes_ruas.values()
+        ) if self.visualizacao.mapa_trafegabilidade is not None else sum(
             geometria.calibrada_manualmente
             and len(self.projeto.polilinha_rua(*chave)) >= 2
             for chave, geometria in self.projeto.ruas.items()
         )
         total_conexoes = len(self.grafo.listar_arestas())
         total_tracadas = len(self.projeto.ruas)
-        superficies_rua = sum(
-            classificacao.value == "rua"
-            for classificacao in self.projeto.superficies.values()
+        inconclusivas = sum(
+            not valido and not conclusivo
+            for valido, conclusivo, _ in self._validacoes_ruas.values()
         )
-        self.resumo_editor.setText(
-            f"Superfícies rua: {superficies_rua} · conexões: {total_conexoes} · "
-            f"traçadas: {total_tracadas} · confirmadas: {calibradas} · "
-            f"pendentes: {total_conexoes - calibradas}\n"
-            "Azul acinzentado = calibrada · laranja = pendente/selecionada"
+        invalidas = sum(
+            not valido and conclusivo
+            for valido, conclusivo, _ in self._validacoes_ruas.values()
         )
+        if self.visualizacao.mapa_trafegabilidade is None:
+            superficies_rua = sum(
+                classificacao.value == "rua"
+                for classificacao in self.projeto.superficies.values()
+            )
+            self.resumo_editor.setText(
+                f"Superfícies rua: {superficies_rua} · conexões: {total_conexoes} · "
+                f"traçadas: {total_tracadas} · confirmadas: {calibradas} · "
+                f"pendentes: {total_conexoes - calibradas}\n"
+                "Azul acinzentado = calibrada · laranja = pendente/selecionada"
+            )
+        else:
+            self.resumo_editor.setText(
+                f"Reconhecimento automático · conexões: {total_conexoes} · "
+                f"traçadas: {total_tracadas} · válidas: {calibradas} · "
+                f"incertas: {inconclusivas} · inválidas: {invalidas}\n"
+                "Azul acinzentado = validada · laranja = pendente/selecionada"
+            )
         self._atualizar_detalhes_rua()
+
+    def _revalidar_ruas_automaticamente(self) -> None:
+        self._validacoes_ruas.clear()
+        if self.visualizacao.mapa_trafegabilidade is None:
+            return
+        for chave in self.projeto.ruas:
+            pontos = self.projeto.polilinha_rua(*chave)
+            resultado = self.visualizacao.validar_rua_automatica(pontos)
+            self._validacoes_ruas[chave] = (
+                resultado.valido,
+                resultado.conclusivo,
+                resultado.motivo,
+            )
 
     def _atualizar_campos_grafo(self, *, force: bool = False) -> None:
         assinatura = tuple(
@@ -1399,11 +1455,21 @@ class JanelaPrincipal(QMainWindow):
             self.editor.comprimento_geometrico(polilinha) if polilinha else 0.0
         )
         intermediarios = len(geometria.pontos_intermediarios) if geometria else 0
-        calibracao = (
-            "confirmada"
-            if geometria and geometria.calibrada_manualmente
-            else "pendente"
+        validacao = self._validacoes_ruas.get(
+            self.projeto.chave_aresta(origem, destino)
         )
+        if validacao is None:
+            calibracao = (
+                "confirmada (legado)"
+                if geometria and geometria.calibrada_manualmente
+                else "pendente"
+            )
+        elif validacao[0]:
+            calibracao = "válida automaticamente"
+        elif validacao[1]:
+            calibracao = "inválida — " + validacao[2]
+        else:
+            calibracao = "inconclusiva — " + validacao[2]
         self.detalhes_rua.setText(
             f"{origem} ↔ {destino} · peso: {peso:g} km · comprimento: "
             f"{comprimento:.4f} · intermediários: {intermediarios} · "
@@ -1461,6 +1527,14 @@ class JanelaPrincipal(QMainWindow):
                     "Segmento selecionado. Use Adicionar ponto para inserir uma curva aqui."
                 )
                 return
+            validacao = self.visualizacao.validar_posicao_trafegavel(
+                posicao
+            )
+            if self.visualizacao.mapa_trafegabilidade is not None and not validacao.valido:
+                self._definir_instrucao(
+                    "Ponto rejeitado pelo mapa automático: " + validacao.motivo
+                )
+                return
             try:
                 indice_segmento = int(objeto.partition(":")[2])
                 resultado = self.editor.aplicar_snap(posicao)
@@ -1509,15 +1583,31 @@ class JanelaPrincipal(QMainWindow):
                 return
             if etapa == "origem":
                 self._definir_instrucao("Selecione o ponto final da rua.")
-            elif self.editor.operacao_rua.editando_aresta is not None:
-                self._definir_instrucao(
-                    "A conexão já existe no grafo. Adicione curvas ou confirme "
-                    "para calibrar seu traçado e peso."
-                )
             else:
-                self._definir_instrucao(
-                    "Adicione curvas clicando no asfalto ou confirme a conexão."
+                operacao = self.editor.operacao_rua
+                inicio = self.projeto.posicoes.get(operacao.origem or "")
+                fim = self.projeto.posicoes.get(operacao.destino or "")
+                caminho = (
+                    self.visualizacao.sugerir_tracado_rua(inicio, fim)
+                    if inicio is not None and fim is not None
+                    else None
                 )
+                if caminho is not None:
+                    operacao.pontos_intermediarios = list(caminho[1:-1])
+                    operacao.pontos_originais = tuple(
+                        operacao.pontos_intermediarios
+                        if operacao.editando_aresta is not None
+                        else ()
+                    )
+                    self._definir_instrucao(
+                        "Traçado sugerido automaticamente sobre ruas reconhecidas. "
+                        "Ajuste os controles ou confirme."
+                    )
+                else:
+                    self._definir_instrucao(
+                        "Não foi encontrado um corredor viário com largura suficiente "
+                        "entre os extremos. Ajuste os pontos ou trace manualmente."
+                    )
             self._sincronizar_cena()
             self._atualizar_botoes_operacao()
             return
@@ -1608,22 +1698,19 @@ class JanelaPrincipal(QMainWindow):
             self._atualizar_botoes_selecao()
             return
 
-        try:
-            self.editor.validar_superficie_trafegavel(referencia)
-        except ValueError as erro:
-            geometria = (
-                self.projeto.geometria_rua(*self.editor.operacao_rua.editando_aresta)
-                if self.editor.operacao_rua.editando_aresta is not None
-                else None
-            )
-            classificacao = self.editor.classificacao_superficie(referencia)
-            rede_confirmada = bool(geometria and geometria.calibrada_manualmente)
-            if not (
-                modo is ModoEditor.EDITAR_TRACADO
-                and rede_confirmada
-                and classificacao.value == "nao_classificada"
-            ):
-                self._definir_instrucao(f"Clique rejeitado: {erro}")
+        if self.visualizacao.mapa_trafegabilidade is not None:
+            validacao = self.visualizacao.validar_posicao_trafegavel(posicao)
+            if not validacao.valido:
+                prefixo = "Área incerta" if not validacao.conclusivo else "Clique rejeitado"
+                self._definir_instrucao(f"{prefixo}: {validacao.motivo}")
+                return
+        else:
+            # Compatibilidade somente durante abertura de projetos antigos ou
+            # em testes sem cena: no uso normal o mapa automático é obrigatório.
+            try:
+                self.editor.validar_superficie_trafegavel(referencia)
+            except ValueError as erro:
+                self._definir_instrucao(f"Reconhecimento indisponível: {erro}")
                 return
 
         if modo is ModoEditor.REPOSICIONAR_VERTICE:
@@ -1753,6 +1840,23 @@ class JanelaPrincipal(QMainWindow):
         if problemas:
             self._mostrar_erro("\n".join(problemas))
             return
+        pontos = self.editor.pontos_rua(
+            operacao.origem,
+            operacao.destino,
+            operacao.pontos_intermediarios,
+        )
+        validacao_automatica = (
+            self.visualizacao.validar_rua_automatica(pontos)
+            if self.visualizacao.mapa_trafegabilidade is not None
+            else None
+        )
+        if validacao_automatica is not None and not validacao_automatica.valido:
+            estado = "inconclusiva" if not validacao_automatica.conclusivo else "inválida"
+            self._mostrar_erro(
+                f"Validação automática {estado}: {validacao_automatica.motivo} "
+                "Ajuste os extremos ou os pontos de controle antes de confirmar."
+            )
+            return
         peso_atual = None
         if operacao.editando_aresta is not None:
             peso_atual = self.grafo.obter_distancia(
@@ -1770,7 +1874,15 @@ class JanelaPrincipal(QMainWindow):
             return
         peso, fator = dialogo.dados()
         try:
-            self.editor.confirmar_rua(peso, fator)
+            self.editor.confirmar_rua(
+                peso,
+                fator,
+                validada_automaticamente=(
+                    validacao_automatica.valido
+                    if validacao_automatica is not None
+                    else True
+                ),
+            )
         except (TypeError, ValueError, KeyError) as erro:
             self._mostrar_erro(str(erro))
             return
@@ -1778,8 +1890,8 @@ class JanelaPrincipal(QMainWindow):
         self._sincronizar_cena()
         self._modo_navegar()
         self._definir_instrucao(
-            "Traçado confirmado. A rota anterior foi invalidada para impedir "
-            "o uso de geometria em cache."
+            "Traçado validado automaticamente e confirmado. A rota anterior foi "
+            "invalidada para impedir o uso de geometria em cache."
         )
 
     def _desfazer_operacao(self) -> None:
@@ -1838,7 +1950,13 @@ class JanelaPrincipal(QMainWindow):
         self._definir_instrucao("Arrastando ponto: solte-o sobre o asfalto.")
         self._sincronizar_cena()
 
-    def _superficie_valida_no_arraste(self, referencia: str) -> bool:
+    def _superficie_valida_no_arraste(
+        self, referencia: str, posicao: tuple[float, float, float] | None = None
+    ) -> bool:
+        if posicao is not None and self.visualizacao.mapa_trafegabilidade is not None:
+            return self.visualizacao.validar_posicao_trafegavel(
+                posicao
+            ).valido
         classificacao = self.editor.classificacao_superficie(referencia)
         if classificacao.value == "rua":
             return True
@@ -1850,8 +1968,7 @@ class JanelaPrincipal(QMainWindow):
             if operacao.editando_aresta is not None
             else None
         )
-        # Uma rede já confirmada pode ser refinada sem reclassificar toda a
-        # malha. Neste caso a confirmação continua explicitamente manual.
+        # Fallback restrito a projetos legados enquanto o mapa não existe.
         return bool(geometria and geometria.calibrada_manualmente)
 
     def _atualizar_arraste_controle(
@@ -1874,7 +1991,7 @@ class JanelaPrincipal(QMainWindow):
             self._sincronizar_cena()
             return
         referencia = self.editor.referencia_superficie(objeto, material)
-        valida = self._superficie_valida_no_arraste(referencia)
+        valida = self._superficie_valida_no_arraste(referencia, (x, y, z))
         resultado = self.editor.aplicar_snap((x, y, z)) if valida else None
         posicao = resultado.posicao if resultado is not None else (x, y, z)
         self.editor.atualizar_arraste_ponto(
@@ -1885,7 +2002,7 @@ class JanelaPrincipal(QMainWindow):
         self._arraste_superficie_valida = valida
         if not valida:
             self._definir_instrucao(
-                "Posição inválida: a superfície é calçada, bloqueada ou não calibrada."
+                "Posição inválida: fora da rua ou sem largura livre para o veículo."
             )
         elif resultado is not None and resultado.encaixado:
             self._definir_instrucao(f"Snap ativo: {resultado.origem}.")
@@ -2133,6 +2250,10 @@ class JanelaPrincipal(QMainWindow):
             resumo = "Falha no renderizador"
         elif "Preparando" in mensagem:
             resumo = "Convertendo modelos…"
+        elif "Analisando" in mensagem or "geometria" in mensagem:
+            resumo = "Reconhecendo ruas…"
+        elif "Mapa viário automático pronto" in mensagem:
+            resumo = "Mapa viário pronto"
         elif "Inicializando" in mensagem:
             resumo = "Inicializando 3D…"
         self.estado_cena.setText(resumo)
@@ -2144,10 +2265,10 @@ class JanelaPrincipal(QMainWindow):
             )
         if not self._editor_inicializado:
             self.cartao_status.definir(resumo)
-        pronto = ok and (
-            self.visualizacao.modelos_preparados
-            or "Modelos preparados" in mensagem
-            or "Cidade e carro carregados" in mensagem
+        pronto = bool(
+            ok
+            and self.visualizacao.modelos_preparados
+            and self.visualizacao.mapa_trafegabilidade is not None
         )
         if pronto:
             for botao in (

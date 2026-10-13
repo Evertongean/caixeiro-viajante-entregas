@@ -491,7 +491,13 @@ class EditorCidade3D:
             )
         )
 
-    def confirmar_rua(self, peso: float, fator_km_por_unidade: float) -> None:
+    def confirmar_rua(
+        self,
+        peso: float,
+        fator_km_por_unidade: float,
+        *,
+        validada_automaticamente: bool = True,
+    ) -> None:
         operacao = self.operacao_rua
         if operacao.origem is None or operacao.destino is None:
             raise ValueError("Selecione os dois extremos da rua.")
@@ -510,7 +516,7 @@ class EditorCidade3D:
             operacao.origem,
             operacao.destino,
             list(operacao.pontos_intermediarios),
-            True,
+            bool(validada_automaticamente),
         )
         self.projeto.fator_km_por_unidade = float(fator_km_por_unidade)
         self.cancelar_operacao()
@@ -637,7 +643,12 @@ class EditorCidade3D:
             )
         return segmentos
 
-    def segmentos_ruas_qml(self) -> list[dict[str, object]]:
+    def segmentos_ruas_qml(
+        self,
+        validacoes_automaticas: dict[
+            tuple[str, str], tuple[bool, bool, str]
+        ] | None = None,
+    ) -> list[dict[str, object]]:
         segmentos: list[dict[str, object]] = []
         for chave, geometria in self.projeto.ruas.items():
             pontos = self.pontos_rua(
@@ -646,8 +657,19 @@ class EditorCidade3D:
                 geometria.pontos_intermediarios,
             )
             identificador = "|".join(chave)
+            validacao = (
+                validacoes_automaticas.get(chave)
+                if validacoes_automaticas is not None
+                else None
+            )
             if self.selecao == ("aresta", *chave):
                 cor = "#F59E0B"
+            elif validacao is not None and validacao[0]:
+                cor = "#5B7896"
+            elif validacao is not None and validacao[1]:
+                cor = "#EF4444"
+            elif validacao is not None:
+                cor = "#FB923C"
             elif geometria.calibrada_manualmente:
                 cor = "#5B7896"
             else:

@@ -7,12 +7,17 @@ from pathlib import Path
 from typing import Sequence
 
 from PySide6 import QtQuick3D  # noqa: F401 - registra os tipos QML
-from PySide6.QtCore import QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuickWidgets import QQuickWidget
 
 from models.estacionamento import DimensoesVeiculo, resolver_estacionamento
 from models.projeto_cidade import EstacionamentoVeiculo, ProjetoCidade
+from models.trafegabilidade import (
+    MapaTrafegabilidade,
+    ResultadoValidacaoTrajeto,
+    TipoRegiao,
+)
 
 from .assets_3d import (
     ESCALA_CARRO_PADRAO,
@@ -21,11 +26,14 @@ from .assets_3d import (
     ErroModelo3D,
     InformacoesModelo3D,
     caminho_modelo,
-    extrair_mapa_superficies,
     inspecionar_modelo,
 )
 from .camera_orbital import CameraOrbital, ModoCamera
 from .camera_seguidora import CameraSeguidora
+from .reconhecimento_superficies import (
+    ResultadoReconhecimento,
+    reconhecer_superficies,
+)
 
 
 # O GLB foi inspecionado por malha/material: grade e para-choque dianteiros
@@ -75,6 +83,8 @@ class Visualizacao3D(QQuickWidget):
         self.camera_seguidora = CameraSeguidora()
         self.info_cidade: InformacoesModelo3D | None = None
         self.info_carro: InformacoesModelo3D | None = None
+        self.resultado_reconhecimento: ResultadoReconhecimento | None = None
+        self.mapa_trafegabilidade: MapaTrafegabilidade | None = None
         self.posicao_carro = (0.0, 0.0, 0.0)
         self.orientacao_carro = 0.0
         self.escala_cidade = ESCALA_CIDADE_PADRAO
@@ -155,6 +165,20 @@ class Visualizacao3D(QQuickWidget):
 
             self.info_cidade = inspecionar_modelo(self.caminho_cidade)
             self.info_carro = inspecionar_modelo(self.caminho_carro)
+            self.resultado_reconhecimento = reconhecer_superficies(
+                self.caminho_cidade,
+                escala=self.escala_cidade,
+                progresso=self._progresso_reconhecimento,
+            )
+            self.mapa_trafegabilidade = self.resultado_reconhecimento.mapa
+            resumo = self.resultado_reconhecimento.estatisticas
+            origem_mapa = (
+                "cache" if self.resultado_reconhecimento.veio_do_cache else "GLB"
+            )
+            self._registrar(
+                "Mapa viário automático pronto "
+                f"({origem_mapa}): {resumo.get(TipoRegiao.RUA, 0)} células de rua."
+            )
             conversor = self.conversor or ConversorBalsam()
             self.conversor = conversor
             self._registrar("Preparando cidade.glb e carro.glb no cache Balsam…")
@@ -188,6 +212,12 @@ class Visualizacao3D(QQuickWidget):
         except (ErroModelo3D, ErroRenderizacao3D, OSError) as erro:
             self.erro_inicializacao = str(erro)
             self._registrar(f"Falha na cena 3D: {erro}", False)
+
+    def _progresso_reconhecimento(self, mensagem: str) -> None:
+        self._registrar(mensagem)
+        # A análise inicial é síncrona para manter o estado determinístico, mas
+        # libera eventos entre etapas para que o indicador seja realmente visto.
+        QCoreApplication.processEvents()
 
     def _atualizar_estado_modelos(self) -> None:
         if self.modelos_visiveis_na_cena:
@@ -232,11 +262,11 @@ class Visualizacao3D(QQuickWidget):
         """Resolve a vaga pela malha real e aplica a pose antes da missão."""
         if self.info_carro is None:
             raise ErroRenderizacao3D("O modelo do carro ainda não foi inspecionado.")
-        mapa = extrair_mapa_superficies(
-            self.caminho_cidade,
-            projeto.superficies,
-            escala=self.escala_cidade,
-        )
+        mapa = self.mapa_trafegabilidade
+        if mapa is None:
+            raise ErroRenderizacao3D(
+                "O mapa automático de trafegabilidade ainda não está pronto."
+            )
         dimensoes_modelo = self.info_carro.limites.dimensoes
         dimensoes = DimensoesVeiculo(
             largura=dimensoes_modelo[0] * self.escala_carro,
@@ -252,6 +282,60 @@ class Visualizacao3D(QQuickWidget):
             imediato=True,
         )
         return estacionamento
+
+    def dimensoes_veiculo(self) -> DimensoesVeiculo:
+        if self.info_carro is None:
+            raise ErroRenderizacao3D("O modelo do carro ainda não foi inspecionado.")
+        dimensoes = self.info_carro.limites.dimensoes
+        return DimensoesVeiculo(
+            largura=dimensoes[0] * self.escala_carro,
+            altura=dimensoes[1] * self.escala_carro,
+            comprimento=dimensoes[2] * self.escala_carro,
+        )
+
+    @property
+    def meia_largura_seguranca(self) -> float:
+        try:
+            return self.dimensoes_veiculo().largura * 0.5 + 0.006
+        except ErroRenderizacao3D:
+            return 0.0
+
+    def validar_posicao_trafegavel(
+        self,
+        posicao: tuple[float, float, float],
+        *,
+        considerar_largura: bool = False,
+    ) -> ResultadoValidacaoTrajeto:
+        if self.mapa_trafegabilidade is None:
+            return ResultadoValidacaoTrajeto(
+                False, False, "O reconhecimento automático ainda não terminou."
+            )
+        return self.mapa_trafegabilidade.validar_posicao(
+            posicao,
+            self.meia_largura_seguranca if considerar_largura else 0.0,
+        )
+
+    def validar_rua_automatica(
+        self, pontos: Sequence[tuple[float, float, float]]
+    ) -> ResultadoValidacaoTrajeto:
+        if self.mapa_trafegabilidade is None:
+            return ResultadoValidacaoTrajeto(
+                False, False, "O reconhecimento automático ainda não terminou."
+            )
+        return self.mapa_trafegabilidade.validar_polilinha(
+            tuple(pontos), self.meia_largura_seguranca
+        )
+
+    def sugerir_tracado_rua(
+        self,
+        inicio: tuple[float, float, float],
+        fim: tuple[float, float, float],
+    ) -> list[tuple[float, float, float]] | None:
+        if self.mapa_trafegabilidade is None:
+            return None
+        return self.mapa_trafegabilidade.sugerir_caminho(
+            inicio, fim, self.meia_largura_seguranca
+        )
 
     def _aplicar_camera(self) -> None:
         raiz = self.rootObject()

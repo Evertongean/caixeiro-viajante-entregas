@@ -77,6 +77,17 @@ class AmostraSuperficie:
 
 
 @dataclass(frozen=True, slots=True)
+class TrianguloSuperficieGLB:
+    """Triângulo renderizável com a semântica bruta disponível no GLB."""
+
+    referencia: str
+    nome_no: str
+    nome_material: str
+    cor_base: tuple[float, float, float, float]
+    triangulo: Triangulo3D
+
+
+@dataclass(frozen=True, slots=True)
 class MapaSuperficies3D:
     """Triângulos reais das superfícies semanticamente classificadas do GLB."""
 
@@ -346,6 +357,120 @@ def extrair_mapa_superficies(
         triangulos={chave: tuple(valor) for chave, valor in encontrados.items()},
         classificacoes=dict(classificacoes),
     )
+
+
+def extrair_triangulos_glb(
+    caminho: str | os.PathLike[str],
+    *,
+    escala: float = ESCALA_CIDADE_PADRAO,
+) -> tuple[TrianguloSuperficieGLB, ...]:
+    """Extrai todos os triângulos do GLB no sistema de coordenadas da cena.
+
+    Diferentemente de :func:`extrair_mapa_superficies`, não depende das antigas
+    classificações manuais. Nomes e cor base são preservados apenas como pistas;
+    a decisão final pode variar espacialmente em cada triângulo/célula.
+    """
+    if not isinstance(escala, (int, float)) or escala <= 0:
+        raise ValueError("A escala da cidade deve ser positiva.")
+    caminho_path = Path(caminho).expanduser().resolve()
+    documento, bloco = _ler_glb(caminho_path)
+    nos = documento.get("nodes", [])
+    malhas = documento.get("meshes", [])
+    materiais = documento.get("materials", [])
+    pais = {
+        filho: indice
+        for indice, no in enumerate(nos)
+        if isinstance(no, dict)
+        for filho in no.get("children", [])
+        if isinstance(filho, int)
+    }
+
+    matrizes: dict[int, Matriz] = {}
+
+    def matriz_mundo(indice: int) -> Matriz:
+        if indice in matrizes:
+            return matrizes[indice]
+        cadeia: list[int] = []
+        atual = indice
+        while True:
+            cadeia.append(atual)
+            if atual not in pais:
+                break
+            atual = pais[atual]
+        matriz = _identidade()
+        for item in reversed(cadeia):
+            matriz = _multiplicar(matriz, _matriz_no(nos[item]))
+        matrizes[indice] = matriz
+        return matriz
+
+    resultado: list[TrianguloSuperficieGLB] = []
+    for indice_no, no in enumerate(nos):
+        if not isinstance(no, dict) or not isinstance(no.get("mesh"), int):
+            continue
+        indice_malha = no["mesh"]
+        if not 0 <= indice_malha < len(malhas):
+            continue
+        nome_no = str(no.get("name", ""))
+        matriz = matriz_mundo(indice_no)
+        primitivas = malhas[indice_malha].get("primitives", [])
+        for primitiva in primitivas:
+            if not isinstance(primitiva, dict) or primitiva.get("mode", 4) != 4:
+                continue
+            indice_material = primitiva.get("material")
+            material: dict[str, Any] = {}
+            if isinstance(indice_material, int) and 0 <= indice_material < len(materiais):
+                candidato = materiais[indice_material]
+                if isinstance(candidato, dict):
+                    material = candidato
+            nome_material = str(material.get("name", ""))
+            fator = material.get("pbrMetallicRoughness", {}).get(
+                "baseColorFactor", (0.5, 0.5, 0.5, 1.0)
+            )
+            if not isinstance(fator, list) or len(fator) != 4:
+                fator = (0.5, 0.5, 0.5, 1.0)
+            cor = tuple(float(componente) for componente in fator)
+            referencia = f"{nome_no}|{nome_material}"
+            atributos = primitiva.get("attributes", {})
+            indice_posicao = atributos.get("POSITION") if isinstance(atributos, dict) else None
+            if not isinstance(indice_posicao, int):
+                continue
+            vertices = [
+                tuple(
+                    coordenada * float(escala)
+                    for coordenada in _transformar(matriz, ponto)
+                )
+                for ponto in _ler_acessor(documento, bloco, indice_posicao)
+            ]
+            if isinstance(primitiva.get("indices"), int):
+                indices = [
+                    int(item[0])
+                    for item in _ler_acessor(documento, bloco, primitiva["indices"])
+                ]
+            else:
+                indices = list(range(len(vertices)))
+            for inicio in range(0, len(indices) - 2, 3):
+                try:
+                    triangulo = (
+                        vertices[indices[inicio]],
+                        vertices[indices[inicio + 1]],
+                        vertices[indices[inicio + 2]],
+                    )
+                except IndexError as erro:
+                    raise ErroModelo3D(
+                        "Uma primitiva referencia vértice inexistente."
+                    ) from erro
+                resultado.append(
+                    TrianguloSuperficieGLB(
+                        referencia,
+                        nome_no,
+                        nome_material,
+                        cor,  # type: ignore[arg-type]
+                        triangulo,
+                    )
+                )
+    if not resultado:
+        raise ErroModelo3D(f"{caminho_path.name} não possui triângulos reconhecíveis.")
+    return tuple(resultado)
 
 
 def _limites_documento(documento: dict[str, Any]) -> Limites3D:
