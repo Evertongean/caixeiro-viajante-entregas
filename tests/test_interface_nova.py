@@ -12,8 +12,9 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtCore import QPoint, QTimer, Qt
     from PySide6.QtQuickWidgets import QQuickWidget
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
     from models.grafo import TipoVertice
@@ -22,6 +23,7 @@ try:
     from ui.janela_principal import JanelaPrincipal
     from models.projeto_cidade import ClassificacaoSuperficie, GeometriaRua
     from ui.dialogos_editor import DialogoSuperficie, DialogoVertice
+    from ui.editor_cidade import ModoEditor
 
     PYSIDE6_DISPONIVEL = True
 except ModuleNotFoundError:
@@ -68,6 +70,26 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIn("visualizacao.pick(x, y)", qml)
         self.assertIn("resultado.scenePosition", qml)
         self.assertIn("resultado.objectHit", qml)
+        self.assertIn("visualizacao.pickAll(x, y)", qml)
+        self.assertIn('diagnosticoUltimoPick = "fora_viewport"', qml)
+        self.assertIn('diagnosticoUltimoPick = "sem_geometria"', qml)
+
+    def test_qml_seleciona_ruas_com_tolerancia_e_desambigua(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("candidatosRua(x, y, segmentosRuas, 10)", qml)
+        self.assertIn("indiceCandidato = (indiceCandidato + 1)", qml)
+        self.assertIn('"ruas_ambiguas:"', qml)
+
+    def test_qml_controles_arrastaveis_nao_movem_extremos(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('objectName: "controle-rua:"', qml)
+        self.assertIn("pickable: modelData.movel", qml)
+        self.assertIn("executarPickArraste", qml)
+        self.assertIn('raiz.modoInteracao === "editar_tracado"', qml)
 
     def test_divisao_inicial_aproxima_setenta_e_cinco_por_cento(self) -> None:
         janela = self.criar_janela()
@@ -317,6 +339,57 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIsNone(janela.rota_calculada)
         self.assertIn("recalcular", janela.cartao_status.valor.text())
 
+    def test_editar_arrastar_cancelar_confirmar_e_reabrir_rua(self) -> None:
+        janela = self.criar_janela()
+        janela.projeto.posicoes = {
+            vertice.identificador: (vertice.x, 0.0, vertice.y)
+            for vertice in janela.grafo.listar_vertices()
+        }
+        inicio = janela.projeto.posicoes["D"]
+        fim = janela.projeto.posicoes["X"]
+        meio = tuple((a + b) / 2 for a, b in zip(inicio, fim))
+        chave = janela.projeto.chave_aresta("D", "X")
+        janela.projeto.ruas[chave] = GeometriaRua("D", "X", [meio], True)
+        original = list(janela.projeto.ruas[chave].pontos_intermediarios)
+        janela.botao_calcular.click()
+        self.assertIsNotNone(janela.rota_calculada)
+
+        janela.editor.selecao = ("aresta", *chave)
+        janela._editar_selecao()
+        self.assertIs(janela.editor.modo, ModoEditor.EDITAR_TRACADO)
+        janela.editor.iniciar_arraste_ponto(0)
+        alterado = (meio[0] + 0.1, meio[1], meio[2] + 0.1)
+        janela.editor.atualizar_arraste_ponto(alterado)
+        janela.editor.finalizar_arraste_ponto(valida=True)
+        janela._sincronizar_cena()
+        self.assertIn("não salvas", janela.detalhes_rua.text())
+        janela._cancelar_operacao()
+        self.assertEqual(janela.projeto.ruas[chave].pontos_intermediarios, original)
+
+        janela._editar_selecao()
+        janela.editor.iniciar_arraste_ponto(0)
+        janela.editor.atualizar_arraste_ponto(alterado)
+        janela.editor.finalizar_arraste_ponto(valida=True)
+        self.assertIsNotNone(janela.rota_calculada)
+        with patch("ui.janela_principal.DialogoRua") as dialogo:
+            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialogo.return_value.dados.return_value = (
+                janela.grafo.obter_distancia("D", "X"),
+                janela.projeto.fator_km_por_unidade,
+            )
+            janela._confirmar_operacao()
+        self.assertEqual(janela.projeto.ruas[chave].pontos_intermediarios, [alterado])
+        self.assertIsNone(janela.rota_calculada)
+
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = Path(pasta) / "rua-editada.json"
+            self.assertTrue(janela.salvar_projeto(caminho))
+            self.assertTrue(janela.abrir_projeto(caminho))
+        self.assertEqual(
+            janela.projeto.geometria_rua("X", "D").pontos_intermediarios,
+            [alterado],
+        )
+
     def test_limpar_rota_remove_resultados_e_destaques(self) -> None:
         janela = self.criar_janela()
         janela.botao_calcular.click()
@@ -519,6 +592,102 @@ class TestNovaInterface(unittest.TestCase):
         self.assertTrue(recebidos[-1][-1])
         self.assertEqual(janela.visualizacao.origem_ultimo_pick, "cidade")
         self.assertEqual(recebidos[-1][3:5], ("wh_plane_0", "plane"))
+
+    def test_grafico_real_seleciona_e_arrasta_controle_sem_salvar(self) -> None:
+        janela = self.criar_janela()
+        janela.resize(1366, 768)
+        self.aplicacao.processEvents()
+        janela.visualizacao.inicializar()
+        for _ in range(40):
+            self.aplicacao.processEvents()
+        if not janela.visualizacao.renderizacao_real_disponivel:
+            self.skipTest("O backend atual não oferece Qt Quick 3D/OpenGL real.")
+        caminho = Path(__file__).parents[1] / "delivery-route-cidade-completa.json"
+        self.assertTrue(janela.abrir_projeto(caminho))
+        for _ in range(12):
+            self.aplicacao.processEvents()
+
+        escolhido = None
+        for chave, geometria in janela.projeto.ruas.items():
+            pontos = janela.projeto.polilinha_rua(*chave)
+            if len(pontos) < 2:
+                continue
+            meio = tuple((a + b) / 2 for a, b in zip(pontos[0], pontos[1]))
+            px, py, profundidade = janela.visualizacao.projetar_ponto(meio)
+            extremo_tela = janela.visualizacao.projetar_ponto(pontos[1])
+            if (
+                profundidade > 0
+                and 20 < px < janela.visualizacao.width() - 20
+                and 20 < py < janela.visualizacao.height() - 20
+            ):
+                escolhido = (
+                    chave,
+                    meio,
+                    QPoint(round(px), round(py)),
+                    QPoint(round(extremo_tela[0]), round(extremo_tela[1])),
+                )
+                break
+        self.assertIsNotNone(escolhido)
+        chave, meio, tela, extremo_tela = escolhido
+        dx = extremo_tela.x() - tela.x()
+        dy = extremo_tela.y() - tela.y()
+        norma = max((dx * dx + dy * dy) ** 0.5, 1.0)
+        clique_tolerante = QPoint(
+            round(tela.x() - 6 * dy / norma),
+            round(tela.y() + 6 * dx / norma),
+        )
+        janela.visualizacao.solicitar_pick(
+            clique_tolerante.x(), clique_tolerante.y()
+        )
+        for _ in range(5):
+            self.aplicacao.processEvents()
+        self.assertEqual(janela.editor.selecao, ("aresta", *chave))
+
+        janela._editar_selecao()
+        janela.editor.inserir_ponto_intermediario(0, meio)
+        janela._sincronizar_cena()
+        for _ in range(5):
+            self.aplicacao.processEvents()
+        controle = janela.visualizacao.projetar_ponto(
+            (meio[0], meio[1] + 0.026, meio[2])
+        )
+        origem = QPoint(round(controle[0]), round(controle[1]))
+        destino = QPoint(
+            round(origem.x() + 6 * dx / norma),
+            round(origem.y() + 6 * dy / norma),
+        )
+        QTest.mousePress(janela.visualizacao, Qt.MouseButton.LeftButton, pos=origem)
+        self.aplicacao.processEvents()
+        self.assertEqual(
+            janela.editor.operacao_rua.arrastando,
+            0,
+            msg=f"Controle não capturado em {origem}; {janela.instrucao_editor.text()}",
+        )
+        QTest.mouseMove(janela.visualizacao, destino, delay=25)
+        self.aplicacao.processEvents()
+        previa_movida = janela.editor.operacao_rua.pontos_intermediarios[0]
+        self.assertNotEqual(
+            previa_movida,
+            meio,
+            msg=f"Prévia não acompanhou o mouse; {janela.instrucao_editor.text()}",
+        )
+        QTest.mouseRelease(
+            janela.visualizacao, Qt.MouseButton.LeftButton, pos=destino
+        )
+        for _ in range(8):
+            self.aplicacao.processEvents()
+        self.assertNotEqual(
+            janela.editor.operacao_rua.pontos_intermediarios[0],
+            meio,
+            msg=f"Arraste foi revertido; {janela.instrucao_editor.text()}",
+        )
+        self.assertEqual(
+            janela.projeto.geometria_rua(*chave).pontos_intermediarios, []
+        )
+        janela._cancelar_operacao()
+        self.assertEqual(
+            janela.projeto.geometria_rua(*chave).pontos_intermediarios, []
+        )
 
     def test_sincronizacao_nao_recria_campos_quando_grafo_nao_mudou(self) -> None:
         janela = self.criar_janela()

@@ -44,6 +44,9 @@ class Visualizacao3D(QQuickWidget):
     estado_alterado = Signal(str, bool)
     camera_alterada = Signal(str)
     ponto_selecionado = Signal(float, float, float, str, str, bool)
+    arraste_controle_iniciado = Signal(int)
+    arraste_controle_atualizado = Signal(float, float, float, str, str, bool)
+    arraste_controle_finalizado = Signal(bool)
 
     def __init__(
         self,
@@ -88,6 +91,8 @@ class Visualizacao3D(QQuickWidget):
         self._modo_interacao = "navegar"
         self._origem_ultimo_pick = "nenhuma"
         self._rede_ruas_visivel = True
+        self._indice_controle_arraste: int | None = None
+        self._ultimo_arraste_encontrado = False
 
     @property
     def referencias_modelos(self) -> tuple[Path, Path]:
@@ -173,6 +178,9 @@ class Visualizacao3D(QQuickWidget):
             sinal_pick = getattr(raiz, "pontoSelecionado", None)
             if sinal_pick is not None:
                 sinal_pick.connect(self._receber_pick)
+            sinal_arraste = getattr(raiz, "pontoArraste", None)
+            if sinal_arraste is not None:
+                sinal_arraste.connect(self._receber_arraste)
             QTimer.singleShot(0, self._atualizar_estado_modelos)
             self._registrar(
                 "Modelos preparados; aguardando a materialização gráfica da cena."
@@ -343,6 +351,7 @@ class Visualizacao3D(QQuickWidget):
             "criar_rua",
             "classificar_superficie",
             "reposicionar_vertice",
+            "editar_tracado",
         }:
             raise ValueError(f"Modo de interação desconhecido: {modo}")
         self._modo_interacao = modo
@@ -367,6 +376,18 @@ class Visualizacao3D(QQuickWidget):
         raiz = self.rootObject()
         origem = raiz.property("origemUltimoPick") if raiz is not None else None
         self._origem_ultimo_pick = str(origem or "nenhuma")
+        if (
+            objeto.startswith("controle-rua:")
+            and self._modo_interacao in {"editar_tracado", "criar_rua"}
+        ):
+            try:
+                indice = int(objeto.partition(":")[2])
+            except ValueError:
+                indice = -1
+            if indice >= 0:
+                self._indice_controle_arraste = indice
+                self._ultimo_arraste_encontrado = True
+                self.arraste_controle_iniciado.emit(indice)
         self.ponto_selecionado.emit(
             float(x),
             float(y),
@@ -380,13 +401,55 @@ class Visualizacao3D(QQuickWidget):
     def origem_ultimo_pick(self) -> str:
         return self._origem_ultimo_pick
 
+    @property
+    def diagnostico_ultimo_pick(self) -> str:
+        raiz = self.rootObject()
+        diagnostico = raiz.property("diagnosticoUltimoPick") if raiz is not None else None
+        return str(diagnostico or "nenhum")
+
+    def _coordenadas_view3d(self, x: float, y: float) -> tuple[float, float]:
+        """Converte coordenadas lógicas do QQuickWidget para a raiz/View3D."""
+        raiz = self.rootObject()
+        if raiz is None or self.width() <= 0 or self.height() <= 0:
+            return float(x), float(y)
+        largura = float(raiz.width())
+        altura = float(raiz.height())
+        return (
+            float(x) * largura / float(self.width()),
+            float(y) * altura / float(self.height()),
+        )
+
     def solicitar_pick(self, x: float, y: float) -> None:
         raiz = self.rootObject()
         if raiz is None:
             return
+        x, y = self._coordenadas_view3d(x, y)
         raiz.setProperty("pickY", -1.0)
         raiz.setProperty("pickX", float(x))
         raiz.setProperty("pickY", float(y))
+
+    def solicitar_pick_arraste(self, x: float, y: float) -> None:
+        raiz = self.rootObject()
+        if raiz is None:
+            return
+        x, y = self._coordenadas_view3d(x, y)
+        raiz.setProperty("arrastePickY", -1.0)
+        raiz.setProperty("arrastePickX", float(x))
+        raiz.setProperty("arrastePickY", float(y))
+
+    def _receber_arraste(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        objeto: str,
+        material: str,
+        encontrado: bool,
+    ) -> None:
+        self._ultimo_arraste_encontrado = bool(encontrado)
+        self.arraste_controle_atualizado.emit(
+            float(x), float(y), float(z), str(objeto), str(material), bool(encontrado)
+        )
 
     def atualizar_marcadores(self, marcadores: list[dict[str, object]]) -> None:
         raiz = self.rootObject()
@@ -408,6 +471,11 @@ class Visualizacao3D(QQuickWidget):
         raiz = self.rootObject()
         if raiz is not None:
             raiz.setProperty("segmentosPrevia", list(segmentos))
+
+    def atualizar_controles_rua(self, controles: list[dict[str, object]]) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("controlesRua", list(controles))
 
     def atualizar_destaque_rota(
         self,
@@ -435,6 +503,15 @@ class Visualizacao3D(QQuickWidget):
         self.camera.focar(centro, dimensoes)
         self._aplicar_camera()
         return True
+
+    def projetar_ponto(self, ponto: Sequence[float]) -> tuple[float, float, float]:
+        if len(ponto) != 3:
+            raise ValueError("A posição deve possuir três coordenadas.")
+        raiz = self.rootObject()
+        if raiz is None:
+            raise ErroRenderizacao3D("A cena QML ainda não está disponível.")
+        projetado = raiz.projetarCena(*(float(valor) for valor in ponto))
+        return float(projetado.x()), float(projetado.y()), float(projetado.z())
 
     def mostrar_marcador_temporario(
         self, posicao: tuple[float, float, float] | None
@@ -466,6 +543,11 @@ class Visualizacao3D(QQuickWidget):
             self._posicao_mouse = evento.position()
             self._botao_mouse = evento.button()
             self._mouse_arrastou = False
+            if (
+                evento.button() == Qt.MouseButton.LeftButton
+                and self._modo_interacao in {"editar_tracado", "criar_rua"}
+            ):
+                self.solicitar_pick(evento.position().x(), evento.position().y())
             evento.accept()
             return
         super().mousePressEvent(evento)
@@ -476,7 +558,11 @@ class Visualizacao3D(QQuickWidget):
             self._posicao_mouse = evento.position()
             if abs(delta.x()) + abs(delta.y()) > 2:
                 self._mouse_arrastou = True
-            if (
+            if self._indice_controle_arraste is not None:
+                self.solicitar_pick_arraste(
+                    evento.position().x(), evento.position().y()
+                )
+            elif (
                 self._botao_mouse == Qt.MouseButton.LeftButton
                 and self._modo_interacao == "navegar"
             ):
@@ -490,9 +576,17 @@ class Visualizacao3D(QQuickWidget):
     def mouseReleaseEvent(self, evento) -> None:  # noqa: N802 - API Qt
         if evento.button() == self._botao_mouse:
             posicao = evento.position()
+            estava_arrastando_controle = self._indice_controle_arraste is not None
+            if estava_arrastando_controle:
+                self.solicitar_pick_arraste(posicao.x(), posicao.y())
+                self.arraste_controle_finalizado.emit(
+                    self._ultimo_arraste_encontrado
+                )
+                self._indice_controle_arraste = None
             deve_selecionar = (
                 evento.button() == Qt.MouseButton.LeftButton
                 and not self._mouse_arrastou
+                and not estava_arrastando_controle
             )
             self._posicao_mouse = None
             self._botao_mouse = None

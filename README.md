@@ -98,10 +98,12 @@ cálculo de rotas e da missão animada são funcionais.
 
 ### Editor visual
 
-O clique é resolvido por `View3D.pick()`. A cena devolve a malha, o material e
-`scenePosition`, portanto a posição já considera a hierarquia e a escala do
-GLB. O grafo usa o plano `(x, z)` da cena e o projeto conserva também a
-coordenada vertical completa `(x, y, z)`.
+O clique é resolvido por `View3D.pick()` e `pickAll()`. A cena devolve a malha,
+o material e `scenePosition`, portanto a posição já considera a hierarquia e a
+escala do GLB. Objetos auxiliares não ocultam o asfalto que está abaixo deles,
+e as coordenadas lógicas do `QQuickWidget` são convertidas para as dimensões
+reais do `View3D`. O grafo usa o plano `(x, z)` da cena e o projeto conserva
+também a coordenada vertical completa `(x, y, z)`.
 
 Os nomes do asset são genéricos e não identificam as ruas com segurança. Por
 isso nenhuma malha é considerada trafegável automaticamente:
@@ -130,6 +132,22 @@ cinza identifica cruzamentos e laranja identifica a operação temporária. Nas
 ruas sobrepostas ao modelo, azul indica geometria calibrada e laranja indica
 geometria pendente ou selecionada. O painel informa permanentemente qual
 ferramenta está ativa e quantas ruas ainda precisam de calibração.
+
+As ruas podem ser selecionadas em uma faixa de 10 pixels ao redor da linha,
+independentemente do zoom. Quando duas linhas ficam dentro dessa faixa, cliques
+repetidos no mesmo local alternam as candidatas e o painel mostra a opção
+atual. Em **Editar**, o início fica verde, o fim laranja e os controles
+intermediários claros. Arraste somente os intermediários; a linha amarela é
+uma prévia e nada é gravado antes de **Confirmar**. Um ponto inválido fica
+vermelho e volta à posição anterior quando o botão é solto.
+
+**Snap inteligente** encaixa dentro de uma distância limitada em vértices e
+segmentos confirmados. Ele não inventa o centro da pista: fora desses alvos, o
+ponto real devolvido pelo picking é mantido. Use **Adicionar ponto** e clique
+em um segmento para inserir na ordem correta, selecione um controle para
+**Remover ponto**, ou use `Ctrl+Z`, `Ctrl+Y`, `Delete`, `Enter` e `Esc` para
+desfazer, refazer, remover, confirmar e cancelar. Cancelar restaura integralmente
+o traçado original.
 
 Ao confirmar uma rua, o diálogo mostra o comprimento geométrico, o fator
 configurável em km/unidade e a sugestão resultante. O peso oficial continua

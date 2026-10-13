@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QCloseEvent, QResizeEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -147,6 +147,8 @@ class JanelaPrincipal(QMainWindow):
             tuple[tuple[str, str, str], ...] | None
         ) = None
         self._colunas_cartoes = 0
+        self._aguardando_insercao_curva = False
+        self._arraste_superficie_valida = False
 
         raiz = QWidget()
         raiz.setObjectName("raizAplicacao")
@@ -169,6 +171,16 @@ class JanelaPrincipal(QMainWindow):
         self.visualizacao.estado_alterado.connect(self._atualizar_estado_cena)
         self.visualizacao.camera_alterada.connect(self._camera_alterada)
         self.visualizacao.ponto_selecionado.connect(self._processar_pick)
+        self.visualizacao.arraste_controle_iniciado.connect(
+            self._iniciar_arraste_controle
+        )
+        self.visualizacao.arraste_controle_atualizado.connect(
+            self._atualizar_arraste_controle
+        )
+        self.visualizacao.arraste_controle_finalizado.connect(
+            self._finalizar_arraste_controle
+        )
+        self._criar_atalhos_editor()
         self._atualizar_controles_missao()
 
     def _criar_cabecalho(self) -> QFrame:
@@ -320,18 +332,44 @@ class JanelaPrincipal(QMainWindow):
         self.resumo_editor.setWordWrap(True)
         layout.addWidget(self.resumo_editor)
 
+        self.detalhes_rua = QLabel("Nenhuma rua selecionada.")
+        self.detalhes_rua.setObjectName("notaFutura")
+        self.detalhes_rua.setWordWrap(True)
+        layout.addWidget(self.detalhes_rua)
+
+        self.snap_editor = QCheckBox("Snap inteligente")
+        self.snap_editor.setChecked(True)
+        self.snap_editor.setToolTip(
+            "Encaixa pontos próximos a vértices e segmentos já confirmados."
+        )
+        layout.addWidget(self.snap_editor)
+
+        curvas = QGridLayout()
+        self.botao_adicionar_curva = QPushButton("Adicionar ponto")
+        self.botao_remover_curva = QPushButton("Remover ponto")
+        self.botao_adicionar_curva.setEnabled(False)
+        self.botao_remover_curva.setEnabled(False)
+        curvas.addWidget(self.botao_adicionar_curva, 0, 0)
+        curvas.addWidget(self.botao_remover_curva, 0, 1)
+        layout.addLayout(curvas)
+
         operacao = QGridLayout()
         self.botao_confirmar_edicao = QPushButton("Confirmar")
         self.botao_confirmar_edicao.setObjectName("botaoMissao")
         self.botao_desfazer_edicao = QPushButton("Desfazer")
+        self.botao_refazer_edicao = QPushButton("Refazer")
         self.botao_cancelar_edicao = QPushButton("Cancelar")
         for indice, botao in enumerate(
-            (self.botao_confirmar_edicao, self.botao_desfazer_edicao)
+            (
+                self.botao_confirmar_edicao,
+                self.botao_desfazer_edicao,
+                self.botao_refazer_edicao,
+            )
         ):
             botao.setEnabled(False)
             operacao.addWidget(botao, 0, indice)
         self.botao_cancelar_edicao.setEnabled(False)
-        operacao.addWidget(self.botao_cancelar_edicao, 1, 0, 1, 2)
+        operacao.addWidget(self.botao_cancelar_edicao, 1, 0, 1, 3)
         layout.addLayout(operacao)
 
         selecao = QGridLayout()
@@ -368,7 +406,11 @@ class JanelaPrincipal(QMainWindow):
         self.botao_classificar.clicked.connect(self._ativar_classificacao)
         self.botao_confirmar_edicao.clicked.connect(self._confirmar_operacao)
         self.botao_desfazer_edicao.clicked.connect(self._desfazer_operacao)
+        self.botao_refazer_edicao.clicked.connect(self._refazer_operacao)
         self.botao_cancelar_edicao.clicked.connect(self._cancelar_operacao)
+        self.botao_adicionar_curva.clicked.connect(self._ativar_insercao_curva)
+        self.botao_remover_curva.clicked.connect(self._remover_curva_selecionada)
+        self.snap_editor.toggled.connect(self._alternar_snap)
         self.botao_editar_selecao.clicked.connect(self._editar_selecao)
         self.botao_reposicionar.clicked.connect(self._reposicionar_selecao)
         self.botao_excluir_selecao.clicked.connect(self._excluir_selecao)
@@ -639,7 +681,10 @@ class JanelaPrincipal(QMainWindow):
             for botao in (
                 self.botao_confirmar_edicao,
                 self.botao_desfazer_edicao,
+                self.botao_refazer_edicao,
                 self.botao_cancelar_edicao,
+                self.botao_adicionar_curva,
+                self.botao_remover_curva,
                 self.botao_editar_selecao,
                 self.botao_reposicionar,
                 self.botao_excluir_selecao,
@@ -1102,15 +1147,32 @@ class JanelaPrincipal(QMainWindow):
     def _definir_instrucao(self, texto: str) -> None:
         self.instrucao_editor.setText(texto)
 
+    def _criar_atalhos_editor(self) -> None:
+        self.atalho_cancelar = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self.atalho_cancelar.activated.connect(self._cancelar_operacao)
+        self.atalho_excluir_ponto = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        self.atalho_excluir_ponto.activated.connect(self._remover_curva_selecionada)
+        self.atalho_desfazer = QShortcut(QKeySequence.StandardKey.Undo, self)
+        self.atalho_desfazer.activated.connect(self._desfazer_operacao)
+        self.atalho_refazer = QShortcut(QKeySequence.StandardKey.Redo, self)
+        self.atalho_refazer.activated.connect(self._refazer_operacao)
+        self.atalho_confirmar = QShortcut(QKeySequence(Qt.Key.Key_Return), self)
+        self.atalho_confirmar.activated.connect(self._confirmar_operacao)
+
+    def _operacao_rua_ativa(self) -> bool:
+        return self.editor.modo in {ModoEditor.CRIAR_RUA, ModoEditor.EDITAR_TRACADO}
+
     def _marcar_ferramenta(self, botao: QPushButton, nome: str) -> None:
         botao.setChecked(True)
         self.estado_ferramenta.setText(f"Ferramenta ativa: {nome}")
 
     def _modo_navegar(self) -> None:
         self.editor.definir_modo(ModoEditor.NAVEGAR)
+        self._aguardando_insercao_curva = False
         self.visualizacao.definir_modo_interacao(ModoEditor.NAVEGAR.value)
         self.visualizacao.mostrar_marcador_temporario(None)
         self.visualizacao.atualizar_previa_rua([])
+        self.visualizacao.atualizar_controles_rua([])
         self._marcar_ferramenta(self.botao_navegar, "Navegar")
         self._definir_instrucao(
             "Clique em um marcador ou rua para selecionar. Use Editar, Reposicionar "
@@ -1140,6 +1202,8 @@ class JanelaPrincipal(QMainWindow):
 
     def _ativar_criacao_rua(self) -> None:
         self.editor.iniciar_rua()
+        self.editor.definir_snap_ativo(self.snap_editor.isChecked())
+        self._aguardando_insercao_curva = False
         self.visualizacao.definir_modo_interacao(ModoEditor.CRIAR_RUA.value)
         self._marcar_ferramenta(self.botao_criar_rua, "Criar rua")
         self._definir_instrucao(
@@ -1162,19 +1226,27 @@ class JanelaPrincipal(QMainWindow):
         self._atualizar_botoes_operacao()
 
     def _cancelar_operacao(self) -> None:
+        era_edicao = self._operacao_rua_ativa()
         self._modo_navegar()
+        if era_edicao:
+            self._definir_instrucao(
+                "Edição cancelada; o traçado original foi preservado."
+            )
 
     def _atualizar_botoes_operacao(self) -> None:
         if self._sessao_missao_ativa:
             for botao in (
                 self.botao_confirmar_edicao,
                 self.botao_desfazer_edicao,
+                self.botao_refazer_edicao,
                 self.botao_cancelar_edicao,
+                self.botao_adicionar_curva,
+                self.botao_remover_curva,
             ):
                 botao.setEnabled(False)
             return
         operacao = self.editor.operacao_rua
-        criando_rua = self.editor.modo is ModoEditor.CRIAR_RUA
+        criando_rua = self._operacao_rua_ativa()
         self.botao_confirmar_edicao.setEnabled(
             criando_rua
             and operacao.origem is not None
@@ -1183,20 +1255,40 @@ class JanelaPrincipal(QMainWindow):
         self.botao_desfazer_edicao.setEnabled(
             criando_rua
             and (
-                operacao.origem is not None
-                or operacao.destino is not None
-                or bool(operacao.pontos_intermediarios)
+                bool(operacao.historico)
+                or (
+                    self.editor.modo is ModoEditor.CRIAR_RUA
+                    and (
+                        operacao.origem is not None
+                        or operacao.destino is not None
+                        or bool(operacao.pontos_intermediarios)
+                    )
+                )
             )
+        )
+        self.botao_refazer_edicao.setEnabled(
+            criando_rua and bool(operacao.futuro)
         )
         self.botao_cancelar_edicao.setEnabled(
             self.editor.modo is not ModoEditor.NAVEGAR
         )
+        editando = self.editor.modo is ModoEditor.EDITAR_TRACADO
+        self.botao_adicionar_curva.setEnabled(editando)
+        self.botao_remover_curva.setEnabled(
+            criando_rua and operacao.ponto_selecionado is not None
+        )
+        self.snap_editor.setEnabled(criando_rua)
 
     def _sincronizar_cena(self) -> None:
         self.visualizacao.atualizar_marcadores(self.editor.marcadores_qml())
         self.visualizacao.atualizar_ruas(self.editor.segmentos_ruas_qml())
         self.visualizacao.atualizar_previa_rua(
             self.editor.segmentos_previa_qml()
+        )
+        self.visualizacao.atualizar_controles_rua(
+            self.editor.controles_rua_qml()
+            if self._operacao_rua_ativa()
+            else []
         )
         if self.rota_calculada is not None:
             self.visualizacao.atualizar_destaque_rota(
@@ -1221,6 +1313,7 @@ class JanelaPrincipal(QMainWindow):
             f"pendentes: {total_conexoes - calibradas}\n"
             "Azul acinzentado = calibrada · laranja = pendente/selecionada"
         )
+        self._atualizar_detalhes_rua()
 
     def _atualizar_campos_grafo(self, *, force: bool = False) -> None:
         assinatura = tuple(
@@ -1272,6 +1365,51 @@ class JanelaPrincipal(QMainWindow):
         self._atualizar_resumo_clientes()
         self._atualizar_disponibilidade_calculo()
 
+    def _atualizar_detalhes_rua(self) -> None:
+        operacao = self.editor.operacao_rua
+        if self._operacao_rua_ativa() and operacao.origem and operacao.destino:
+            peso = (
+                self.grafo.obter_distancia(operacao.origem, operacao.destino)
+                if self.grafo.existe_aresta(operacao.origem, operacao.destino)
+                else None
+            )
+            estado = "não salvas" if operacao.modificada else "sem alterações"
+            snap = f" · snap: {operacao.snap_origem}" if operacao.snap_origem else ""
+            cabecalho = (
+                f"{operacao.origem} ↔ {operacao.destino} · peso: {peso:g} km · "
+                if peso is not None
+                else f"{operacao.origem} ↔ {operacao.destino} · peso: novo · "
+            )
+            self.detalhes_rua.setText(
+                cabecalho
+                + f"comprimento: {self.editor.comprimento_operacao_rua():.4f} · "
+                f"intermediários: {len(operacao.pontos_intermediarios)} · "
+                f"alterações {estado}{snap}"
+            )
+            return
+        selecao = self.editor.selecao
+        if selecao is None or selecao[0] != "aresta":
+            self.detalhes_rua.setText("Nenhuma rua selecionada.")
+            return
+        origem, destino = selecao[1], selecao[2]
+        geometria = self.projeto.geometria_rua(origem, destino)
+        peso = self.grafo.obter_distancia(origem, destino)
+        polilinha = self.projeto.polilinha_rua(origem, destino)
+        comprimento = (
+            self.editor.comprimento_geometrico(polilinha) if polilinha else 0.0
+        )
+        intermediarios = len(geometria.pontos_intermediarios) if geometria else 0
+        calibracao = (
+            "confirmada"
+            if geometria and geometria.calibrada_manualmente
+            else "pendente"
+        )
+        self.detalhes_rua.setText(
+            f"{origem} ↔ {destino} · peso: {peso:g} km · comprimento: "
+            f"{comprimento:.4f} · intermediários: {intermediarios} · "
+            f"calibração {calibracao} · sem alterações"
+        )
+
     def _processar_pick(
         self,
         x: float,
@@ -1287,11 +1425,56 @@ class JanelaPrincipal(QMainWindow):
             )
             return
         if not encontrado:
+            diagnostico = self.visualizacao.diagnostico_ultimo_pick
+            mensagens = {
+                "fora_viewport": "O clique ficou fora da área útil da cena 3D.",
+                "cena_nao_pronta": (
+                    "A cena 3D ainda não terminou de carregar; aguarde e tente novamente."
+                ),
+                "sem_geometria": "Clique realmente fora da geometria da cidade.",
+                "sem_superficie_cidade": "Nenhuma superfície da cidade foi atingida.",
+            }
             self._definir_instrucao(
-                "Nenhuma geometria foi atingida. Tente novamente sobre a cidade."
+                mensagens.get(
+                    diagnostico,
+                    "Nenhuma geometria foi atingida. Tente novamente sobre a cidade.",
+                )
             )
             return
         posicao = (x, y, z)
+        if objeto.startswith("controle-rua:"):
+            try:
+                indice = int(objeto.partition(":")[2])
+                self.editor.selecionar_ponto_intermediario(indice)
+            except (ValueError, IndexError):
+                return
+            self._definir_instrucao(
+                "Ponto de controle selecionado. Arraste-o sobre o asfalto ou "
+                "use Remover ponto."
+            )
+            self._sincronizar_cena()
+            self._atualizar_botoes_operacao()
+            return
+        if objeto.startswith("segmento-edicao:"):
+            if not self._aguardando_insercao_curva:
+                self._definir_instrucao(
+                    "Segmento selecionado. Use Adicionar ponto para inserir uma curva aqui."
+                )
+                return
+            try:
+                indice_segmento = int(objeto.partition(":")[2])
+                resultado = self.editor.aplicar_snap(posicao)
+                self.editor.inserir_ponto_intermediario(
+                    indice_segmento, resultado.posicao
+                )
+            except (ValueError, IndexError) as erro:
+                self._definir_instrucao(str(erro))
+                return
+            self._aguardando_insercao_curva = False
+            self._definir_instrucao("Ponto intermediário inserido no segmento.")
+            self._sincronizar_cena()
+            self._atualizar_botoes_operacao()
+            return
         if objeto.startswith("vertice:"):
             self._clicar_vertice(objeto.partition(":")[2])
             return
@@ -1356,8 +1539,16 @@ class JanelaPrincipal(QMainWindow):
         except (KeyError, ValueError):
             return
         self.editor.selecao = ("aresta", *self.projeto.chave_aresta(origem, destino))
+        ambiguidade = self.visualizacao.diagnostico_ultimo_pick
+        complemento = ""
+        if ambiguidade.startswith("ruas_ambiguas:"):
+            complemento = (
+                f" · opção {ambiguidade.partition(':')[2]}; clique novamente "
+                "no mesmo local para alternar"
+            )
         self._definir_instrucao(
-            f"Rua {origem} ↔ {destino} selecionada · peso oficial {peso:g} km."
+            f"Rua selecionada: {origem} ↔ {destino} · peso oficial {peso:g} km"
+            f"{complemento}."
         )
         self._sincronizar_cena()
         self._atualizar_botoes_selecao()
@@ -1409,6 +1600,7 @@ class JanelaPrincipal(QMainWindow):
         if modo not in {
             ModoEditor.ADICIONAR_PONTO,
             ModoEditor.CRIAR_RUA,
+            ModoEditor.EDITAR_TRACADO,
             ModoEditor.REPOSICIONAR_VERTICE,
         }:
             self.editor.selecao = None
@@ -1419,10 +1611,20 @@ class JanelaPrincipal(QMainWindow):
         try:
             self.editor.validar_superficie_trafegavel(referencia)
         except ValueError as erro:
-            self._definir_instrucao(
-                f"Clique rejeitado: {erro}"
+            geometria = (
+                self.projeto.geometria_rua(*self.editor.operacao_rua.editando_aresta)
+                if self.editor.operacao_rua.editando_aresta is not None
+                else None
             )
-            return
+            classificacao = self.editor.classificacao_superficie(referencia)
+            rede_confirmada = bool(geometria and geometria.calibrada_manualmente)
+            if not (
+                modo is ModoEditor.EDITAR_TRACADO
+                and rede_confirmada
+                and classificacao.value == "nao_classificada"
+            ):
+                self._definir_instrucao(f"Clique rejeitado: {erro}")
+                return
 
         if modo is ModoEditor.REPOSICIONAR_VERTICE:
             identificador = self.editor.vertice_reposicionado
@@ -1441,6 +1643,25 @@ class JanelaPrincipal(QMainWindow):
 
         if modo is ModoEditor.ADICIONAR_PONTO:
             self._criar_vertice_no_ponto(posicao, self.editor.tipo_sugerido)
+            return
+
+        if modo is ModoEditor.EDITAR_TRACADO:
+            if not self._aguardando_insercao_curva:
+                self._definir_instrucao(
+                    "Selecione e arraste um controle, ou ative Adicionar ponto."
+                )
+                return
+            try:
+                indice, _, _ = self.editor.segmento_operacao_mais_proximo(posicao)
+                resultado = self.editor.aplicar_snap(posicao)
+                self.editor.inserir_ponto_intermediario(indice, resultado.posicao)
+            except (ValueError, IndexError) as erro:
+                self._definir_instrucao(str(erro))
+                return
+            self._aguardando_insercao_curva = False
+            self._definir_instrucao("Ponto intermediário inserido na ordem da rua.")
+            self._sincronizar_cena()
+            self._atualizar_botoes_operacao()
             return
 
         operacao = self.editor.operacao_rua
@@ -1522,12 +1743,16 @@ class JanelaPrincipal(QMainWindow):
         return identificador
 
     def _confirmar_operacao(self) -> None:
-        if self.editor.modo is not ModoEditor.CRIAR_RUA:
+        if not self._operacao_rua_ativa():
             return
         operacao = self.editor.operacao_rua
         if operacao.origem is None or operacao.destino is None:
             return
         comprimento = self.editor.comprimento_operacao_rua()
+        problemas = self.editor.validar_operacao_rua()
+        if problemas:
+            self._mostrar_erro("\n".join(problemas))
+            return
         peso_atual = None
         if operacao.editando_aresta is not None:
             peso_atual = self.grafo.obter_distancia(
@@ -1552,15 +1777,134 @@ class JanelaPrincipal(QMainWindow):
         self._invalidar_rota_por_edicao()
         self._sincronizar_cena()
         self._modo_navegar()
-        self._definir_instrucao("Rua criada com sucesso.")
+        self._definir_instrucao(
+            "Traçado confirmado. A rota anterior foi invalidada para impedir "
+            "o uso de geometria em cache."
+        )
 
     def _desfazer_operacao(self) -> None:
-        if self.editor.modo is ModoEditor.CRIAR_RUA:
+        if self._operacao_rua_ativa() and self.editor.operacao_rua.historico:
+            if self.editor.desfazer_edicao_rua():
+                self._definir_instrucao("Última alteração do traçado desfeita.")
+            self._sincronizar_cena()
+            self._atualizar_botoes_operacao()
+        elif self.editor.modo is ModoEditor.CRIAR_RUA:
             removido = self.editor.desfazer_ponto_rua()
             if removido is not None:
                 self._definir_instrucao(f"Último {removido.replace('_', ' ')} removido.")
             self._sincronizar_cena()
             self._atualizar_botoes_operacao()
+
+    def _refazer_operacao(self) -> None:
+        if self._operacao_rua_ativa() and self.editor.refazer_edicao_rua():
+            self._definir_instrucao("Alteração do traçado refeita.")
+            self._sincronizar_cena()
+            self._atualizar_botoes_operacao()
+
+    def _alternar_snap(self, ativo: bool) -> None:
+        if self._operacao_rua_ativa():
+            self.editor.definir_snap_ativo(ativo)
+            self._sincronizar_cena()
+
+    def _ativar_insercao_curva(self) -> None:
+        if not self._operacao_rua_ativa():
+            return
+        self._aguardando_insercao_curva = True
+        self._definir_instrucao(
+            "Clique em um segmento amarelo ou no asfalto próximo para inserir o ponto."
+        )
+
+    def _remover_curva_selecionada(self) -> None:
+        if not self._operacao_rua_ativa():
+            return
+        try:
+            self.editor.remover_ponto_intermediario()
+        except ValueError as erro:
+            self._definir_instrucao(str(erro))
+            return
+        self._definir_instrucao("Ponto intermediário removido da prévia.")
+        self._sincronizar_cena()
+        self._atualizar_botoes_operacao()
+
+    def _iniciar_arraste_controle(self, indice: int) -> None:
+        if not self._operacao_rua_ativa():
+            return
+        try:
+            self.editor.iniciar_arraste_ponto(indice)
+        except (ValueError, IndexError) as erro:
+            self._definir_instrucao(str(erro))
+            return
+        self._arraste_superficie_valida = True
+        self._definir_instrucao("Arrastando ponto: solte-o sobre o asfalto.")
+        self._sincronizar_cena()
+
+    def _superficie_valida_no_arraste(self, referencia: str) -> bool:
+        classificacao = self.editor.classificacao_superficie(referencia)
+        if classificacao.value == "rua":
+            return True
+        if classificacao.value in {"calcada", "bloqueada"}:
+            return False
+        operacao = self.editor.operacao_rua
+        geometria = (
+            self.projeto.geometria_rua(*operacao.editando_aresta)
+            if operacao.editando_aresta is not None
+            else None
+        )
+        # Uma rede já confirmada pode ser refinada sem reclassificar toda a
+        # malha. Neste caso a confirmação continua explicitamente manual.
+        return bool(geometria and geometria.calibrada_manualmente)
+
+    def _atualizar_arraste_controle(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        objeto: str,
+        material: str,
+        encontrado: bool,
+    ) -> None:
+        if self.editor.operacao_rua.arrastando is None:
+            return
+        if not encontrado:
+            self.editor.operacao_rua.previa_valida = False
+            self._arraste_superficie_valida = False
+            self._definir_instrucao(
+                "Posição inválida: nenhuma superfície da cidade sob o cursor."
+            )
+            self._sincronizar_cena()
+            return
+        referencia = self.editor.referencia_superficie(objeto, material)
+        valida = self._superficie_valida_no_arraste(referencia)
+        resultado = self.editor.aplicar_snap((x, y, z)) if valida else None
+        posicao = resultado.posicao if resultado is not None else (x, y, z)
+        self.editor.atualizar_arraste_ponto(
+            posicao,
+            valida=valida,
+            snap_origem=resultado.origem if resultado is not None else None,
+        )
+        self._arraste_superficie_valida = valida
+        if not valida:
+            self._definir_instrucao(
+                "Posição inválida: a superfície é calçada, bloqueada ou não calibrada."
+            )
+        elif resultado is not None and resultado.encaixado:
+            self._definir_instrucao(f"Snap ativo: {resultado.origem}.")
+        else:
+            self._definir_instrucao("Prévia do ponto atualizada; solte para validar.")
+        self._sincronizar_cena()
+
+    def _finalizar_arraste_controle(self, encontrado: bool) -> None:
+        if self.editor.operacao_rua.arrastando is None:
+            return
+        valida = bool(encontrado and self._arraste_superficie_valida)
+        alterou = self.editor.finalizar_arraste_ponto(valida=valida)
+        self._definir_instrucao(
+            "Ponto reposicionado na prévia; confirme para salvar."
+            if alterou
+            else "Posição inválida; o ponto voltou à posição anterior."
+        )
+        self._sincronizar_cena()
+        self._atualizar_botoes_operacao()
 
     def _atualizar_botoes_selecao(self) -> None:
         if self._sessao_missao_ativa:
@@ -1597,10 +1941,13 @@ class JanelaPrincipal(QMainWindow):
             return
         origem, destino = selecao[1], selecao[2]
         self.editor.iniciar_rua(origem, destino, editar=True)
-        self.visualizacao.definir_modo_interacao(ModoEditor.CRIAR_RUA.value)
+        self.editor.definir_snap_ativo(self.snap_editor.isChecked())
+        self._aguardando_insercao_curva = False
+        self.visualizacao.definir_modo_interacao(ModoEditor.EDITAR_TRACADO.value)
         self._marcar_ferramenta(self.botao_criar_rua, "Editar rua")
         self._definir_instrucao(
-            "Edite o traçado: adicione curvas, desfaça pontos ou confirme para alterar o peso."
+            "Pontos verdes/laranja são extremos fixos. Arraste os controles claros; "
+            "use Adicionar ponto em um segmento e confirme somente ao terminar."
         )
         self._sincronizar_cena()
         self._atualizar_botoes_operacao()

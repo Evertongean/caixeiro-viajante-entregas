@@ -9,12 +9,20 @@ Item {
 
     signal pontoSelecionado(real x, real y, real z, string objeto,
                             string material, bool encontrado)
+    signal pontoArraste(real x, real y, real z, string objeto,
+                        string material, bool encontrado)
     property real pickX: -1
     property real pickY: -1
+    property real arrastePickX: -1
+    property real arrastePickY: -1
     property string modoInteracao: "navegar"
     onPickYChanged: {
         if (pickX >= 0 && pickY >= 0)
             executarPick(pickX, pickY)
+    }
+    onArrastePickYChanged: {
+        if (arrastePickX >= 0 && arrastePickY >= 0)
+            executarPickArraste(arrastePickX, arrastePickY)
     }
 
     property url cidadeFonte
@@ -40,6 +48,7 @@ Item {
     property var marcadores: []
     property var segmentosRuas: []
     property var segmentosPrevia: []
+    property var controlesRua: []
     property var segmentosRota: []
     property var marcadoresRota: []
     property bool mostrarRedeRuas: true
@@ -51,6 +60,10 @@ Item {
     property real espessuraRotaMundo: 0.0012
     property real distanciaRotulosCruzamentos: 2.4
     property string origemUltimoPick: "nenhuma"
+    property string diagnosticoUltimoPick: "nenhum"
+    property string assinaturaCandidatos: ""
+    property int indiceCandidato: 0
+    property point ultimoCliqueRua: Qt.point(-1000, -1000)
     property bool marcadorTemporarioVisivel: false
     property vector3d marcadorTemporarioPosicao: Qt.vector3d(0, 0, 0)
 
@@ -81,6 +94,8 @@ Item {
         if (descendeDe(no, carroLoader.item))
             return "carro"
         if (nome.startsWith("vertice:") || nome.startsWith("aresta:")
+                || nome.startsWith("controle-rua:")
+                || nome.startsWith("segmento-edicao:")
                 || nome.startsWith("marcador-rota:")
                 || nome === "destaque-rota" || nome === "previa-rua"
                 || nome === "marcador-temporario")
@@ -88,15 +103,7 @@ Item {
         return "outro"
     }
 
-    function executarPick(x, y) {
-        const resultado = visualizacao.pick(x, y)
-        if (!resultado.objectHit) {
-            origemUltimoPick = "nenhuma"
-            pontoSelecionado(0, 0, 0, "", "", false)
-            return
-        }
-        const objeto = resultado.objectHit.objectName || "malha-sem-nome"
-        origemUltimoPick = origemDoPick(resultado.objectHit, objeto)
+    function materialDoResultado(resultado) {
         let material = ""
         try {
             if (resultado.objectHit.materials
@@ -105,8 +112,157 @@ Item {
         } catch (erro) {
             material = ""
         }
+        return material
+    }
+
+    function distanciaSegmento2D(px, py, ax, ay, bx, by) {
+        const dx = bx - ax
+        const dy = by - ay
+        const denominador = dx * dx + dy * dy
+        let t = denominador > 0
+            ? ((px - ax) * dx + (py - ay) * dy) / denominador : 0
+        t = Math.max(0, Math.min(1, t))
+        const qx = ax + t * dx
+        const qy = ay + t * dy
+        const ex = px - qx
+        const ey = py - qy
+        return {distancia: Math.sqrt(ex * ex + ey * ey), t: t}
+    }
+
+    function candidatosRua(x, y, segmentos, tolerancia) {
+        let melhores = ({})
+        for (let indice = 0; indice < segmentos.length; ++indice) {
+            const item = segmentos[indice]
+            const a = visualizacao.mapFrom3DScene(Qt.vector3d(item.ax, item.ay, item.az))
+            const b = visualizacao.mapFrom3DScene(Qt.vector3d(item.bx, item.by, item.bz))
+            if (a.z <= 0 || b.z <= 0)
+                continue
+            const medida = distanciaSegmento2D(x, y, a.x, a.y, b.x, b.y)
+            if (medida.distancia > tolerancia)
+                continue
+            const identificador = item.aresta
+            const anterior = melhores[identificador]
+            if (!anterior || medida.distancia < anterior.distancia) {
+                melhores[identificador] = {
+                    id: identificador,
+                    distancia: medida.distancia,
+                    x: item.ax + (item.bx - item.ax) * medida.t,
+                    y: item.ay + (item.by - item.ay) * medida.t,
+                    z: item.az + (item.bz - item.az) * medida.t
+                }
+            }
+        }
+        let lista = []
+        for (const chave in melhores)
+            lista.push(melhores[chave])
+        lista.sort((a, b) => a.distancia - b.distancia || a.id.localeCompare(b.id))
+        return lista
+    }
+
+    function escolherRua(candidatos, x, y) {
+        if (candidatos.length === 0)
+            return null
+        const assinatura = candidatos.map(item => item.id).join(";")
+        const perto = Math.abs(x - ultimoCliqueRua.x) <= 6
+            && Math.abs(y - ultimoCliqueRua.y) <= 6
+        if (assinatura === assinaturaCandidatos && perto)
+            indiceCandidato = (indiceCandidato + 1) % candidatos.length
+        else
+            indiceCandidato = 0
+        assinaturaCandidatos = assinatura
+        ultimoCliqueRua = Qt.point(x, y)
+        return candidatos[indiceCandidato]
+    }
+
+    function emitirResultado(resultado) {
+        const objeto = resultado.objectHit.objectName || "malha-sem-nome"
+        origemUltimoPick = origemDoPick(resultado.objectHit, objeto)
+        diagnosticoUltimoPick = "atingido"
         const ponto = resultado.scenePosition
-        pontoSelecionado(ponto.x, ponto.y, ponto.z, objeto, material, true)
+        pontoSelecionado(ponto.x, ponto.y, ponto.z, objeto,
+                         materialDoResultado(resultado), true)
+    }
+
+    function executarPick(x, y) {
+        if (x < 0 || y < 0 || x >= visualizacao.width || y >= visualizacao.height) {
+            origemUltimoPick = "nenhuma"
+            diagnosticoUltimoPick = "fora_viewport"
+            pontoSelecionado(0, 0, 0, "", "", false)
+            return
+        }
+        if (modelosProntos < 2) {
+            origemUltimoPick = "nenhuma"
+            diagnosticoUltimoPick = "cena_nao_pronta"
+            pontoSelecionado(0, 0, 0, "", "", false)
+            return
+        }
+        // Mantém o pick direto como diagnóstico do raio principal; pickAll é
+        // usado em seguida para atravessar overlays auxiliares com segurança.
+        const resultadoDireto = visualizacao.pick(x, y)
+        const atingidos = visualizacao.pickAll(x, y)
+        if (atingidos.length === 0 && resultadoDireto.objectHit)
+            atingidos.push(resultadoDireto)
+        // Controles têm prioridade explícita durante a edição.
+        for (let indice = 0; indice < atingidos.length; ++indice) {
+            const nome = atingidos[indice].objectHit.objectName || ""
+            if (nome.startsWith("controle-rua:")
+                    || nome.startsWith("segmento-edicao:")) {
+                emitirResultado(atingidos[indice])
+                return
+            }
+            if (nome.startsWith("vertice:")) {
+                emitirResultado(atingidos[indice])
+                return
+            }
+        }
+        if (modoInteracao === "navegar") {
+            const candidatas = candidatosRua(x, y, segmentosRuas, 10)
+            const rua = escolherRua(candidatas, x, y)
+            if (rua) {
+                origemUltimoPick = "editor"
+                diagnosticoUltimoPick = candidatas.length > 1
+                    ? "ruas_ambiguas:" + (indiceCandidato + 1) + "/" + candidatas.length
+                    : "atingido"
+                pontoSelecionado(rua.x, rua.y, rua.z,
+                                 "aresta:" + rua.id, "", true)
+                return
+            }
+        }
+        // Objetos auxiliares não devem impedir o acesso à malha real abaixo.
+        for (let indice = 0; indice < atingidos.length; ++indice) {
+            const resultado = atingidos[indice]
+            const nome = resultado.objectHit.objectName || "malha-sem-nome"
+            const origem = origemDoPick(resultado.objectHit, nome)
+            if (origem !== "editor") {
+                emitirResultado(resultado)
+                return
+            }
+        }
+        origemUltimoPick = "nenhuma"
+        diagnosticoUltimoPick = "sem_geometria"
+        pontoSelecionado(0, 0, 0, "", "", false)
+    }
+
+    function executarPickArraste(x, y) {
+        if (x < 0 || y < 0 || x >= visualizacao.width || y >= visualizacao.height) {
+            diagnosticoUltimoPick = "fora_viewport"
+            pontoArraste(0, 0, 0, "", "", false)
+            return
+        }
+        const atingidos = visualizacao.pickAll(x, y)
+        for (let indice = 0; indice < atingidos.length; ++indice) {
+            const resultado = atingidos[indice]
+            const nome = resultado.objectHit.objectName || "malha-sem-nome"
+            if (origemDoPick(resultado.objectHit, nome) === "cidade") {
+                diagnosticoUltimoPick = "atingido"
+                const ponto = resultado.scenePosition
+                pontoArraste(ponto.x, ponto.y, ponto.z, nome,
+                             materialDoResultado(resultado), true)
+                return
+            }
+        }
+        diagnosticoUltimoPick = "sem_superficie_cidade"
+        pontoArraste(0, 0, 0, "", "", false)
     }
 
     function centroSegmento(item) {
@@ -150,6 +306,10 @@ Item {
         // Os parametros existem para estabelecer dependencias reativas
         // individuais, inclusive quando dois movimentos numericos se anulam.
         return visualizacao.mapFrom3DScene(ponto)
+    }
+
+    function projetarCena(x, y, z) {
+        return visualizacao.mapFrom3DScene(Qt.vector3d(x, y, z))
     }
 
     function projecaoVisivel(ponto, largura, altura) {
@@ -300,9 +460,9 @@ Item {
             delegate: Model {
                 id: segmentoPrevia
                 required property var modelData
-                objectName: "previa-rua"
+                objectName: "segmento-edicao:" + modelData.id.split(":").pop()
                 source: "#Cube"
-                pickable: false
+                pickable: raiz.modoInteracao === "editar_tracado"
                 position: raiz.centroSegmento(modelData)
                 eulerRotation: raiz.rotacaoSegmento(modelData)
                 scale: Qt.vector3d(
@@ -311,9 +471,35 @@ Item {
                     raiz.comprimentoSegmento(modelData) / 100
                 )
                 materials: PrincipledMaterial {
-                    baseColor: "#F59E0B"
-                    emissiveFactor: Qt.vector3d(0.45, 0.20, 0.02)
+                    baseColor: segmentoPrevia.modelData.cor
+                    emissiveFactor: Qt.vector3d(0.34, 0.27, 0.02)
                     roughness: 0.28
+                }
+            }
+        }
+
+        Repeater3D {
+            model: raiz.controlesRua
+            delegate: Model {
+                id: controleRua
+                required property var modelData
+                objectName: "controle-rua:" + modelData.indiceIntermediario
+                source: modelData.encaixado ? "#Cube" : "#Sphere"
+                pickable: modelData.movel
+                    && (raiz.modoInteracao === "editar_tracado"
+                        || raiz.modoInteracao === "criar_rua")
+                position: Qt.vector3d(
+                    modelData.x, modelData.y + 0.026, modelData.z
+                )
+                scale: modelData.movel
+                    ? Qt.vector3d(0.00030, 0.00030, 0.00030)
+                    : Qt.vector3d(0.00025, 0.00025, 0.00025)
+                materials: PrincipledMaterial {
+                    baseColor: controleRua.modelData.cor
+                    emissiveFactor: controleRua.modelData.encaixado
+                        ? Qt.vector3d(0.10, 0.55, 0.65)
+                        : Qt.vector3d(0.20, 0.20, 0.20)
+                    roughness: 0.18
                 }
             }
         }
