@@ -17,11 +17,16 @@ try:
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
-    from models.grafo import TipoVertice
+    from models.grafo import Grafo, TipoVertice, Vertice, criar_cenario_exemplo
     from ui.assets_3d import ConversorBalsam
     from ui.camera_orbital import ModoCamera
     from ui.janela_principal import JanelaPrincipal
-    from models.projeto_cidade import ClassificacaoSuperficie, GeometriaRua
+    from models.projeto_cidade import (
+        ClassificacaoSuperficie,
+        GeometriaRua,
+        ProjetoCidade,
+        salvar_projeto_cidade,
+    )
     from ui.dialogos_editor import DialogoSuperficie, DialogoVertice
     from ui.editor_cidade import ModoEditor
 
@@ -37,7 +42,12 @@ class TestNovaInterface(unittest.TestCase):
         cls.aplicacao = QApplication.instance() or QApplication([])
 
     def criar_janela(self) -> JanelaPrincipal:
-        janela = JanelaPrincipal(auto_inicializar_3d=False)
+        # A maioria destes testes exercita a rede didática antiga de forma
+        # explícita; a GUI real não herda mais esse cenário.
+        janela = JanelaPrincipal(
+            auto_inicializar_3d=False,
+            projeto_inicial=ProjetoCidade(grafo=criar_cenario_exemplo()),
+        )
         janela.show()
         self.aplicacao.processEvents()
         self.addCleanup(self._fechar, janela)
@@ -47,6 +57,136 @@ class TestNovaInterface(unittest.TestCase):
         janela.close()
         janela.deleteLater()
         self.aplicacao.processEvents()
+
+    def criar_janela_limpa(self) -> JanelaPrincipal:
+        janela = JanelaPrincipal(auto_inicializar_3d=False)
+        janela.show()
+        self.aplicacao.processEvents()
+        self.addCleanup(self._fechar, janela)
+        return janela
+
+    def test_inicio_real_tem_apenas_deposito_e_estado_neutro(self) -> None:
+        janela = self.criar_janela_limpa()
+        vertices = janela.grafo.listar_vertices()
+        self.assertEqual(
+            [(item.identificador, item.nome, item.tipo) for item in vertices],
+            [("D", "Depósito Central", TipoVertice.DEPOSITO)],
+        )
+        self.assertEqual(janela.grafo.listar_clientes(), [])
+        self.assertEqual(janela.grafo.listar_arestas(), [])
+        self.assertEqual([item["id"] for item in janela.editor.marcadores_qml()], ["D"])
+        self.assertEqual(janela.origem.count(), 1)
+        self.assertEqual(janela.destino.count(), 1)
+        self.assertEqual(janela.lista_clientes.count(), 0)
+        self.assertFalse(janela.botao_calcular.isEnabled())
+        self.assertIn("dois pontos", janela.botao_calcular.toolTip())
+        self.assertEqual(janela.cartao_distancia.valor.text(), "—")
+        self.assertEqual(
+            janela.cartao_percurso.valor.text(), "Nenhuma rota calculada"
+        )
+        self.assertEqual(janela.cartao_clientes.valor.text(), "0 / 0")
+        self.assertIsNone(janela.rota_calculada)
+        self.assertIsNone(janela.controlador_missao)
+        self.assertIsNone(janela.caminho_projeto)
+        self.assertFalse(janela.projeto_modificado)
+
+    def test_controles_do_cenario_limpo_ficam_coerentes_apos_cena_pronta(self) -> None:
+        janela = self.criar_janela_limpa()
+        janela.visualizacao.modelos_preparados = True
+        janela._atualizar_estado_cena("Modelos preparados", True)
+        self.assertTrue(janela.botao_navegar.isEnabled())
+        self.assertTrue(janela.botao_adicionar_ponto.isEnabled())
+        self.assertTrue(janela.botao_adicionar_cliente.isEnabled())
+        self.assertFalse(janela.botao_definir_deposito.isEnabled())
+        self.assertFalse(janela.botao_criar_rua.isEnabled())
+        self.assertEqual(
+            janela.cartao_status.valor.text(),
+            "Cidade pronta. Adicione clientes para começar.",
+        )
+
+    def test_adiciona_primeiro_e_multiplos_clientes_no_cenario_limpo(self) -> None:
+        janela = self.criar_janela_limpa()
+        janela._editor_inicializado = True
+        respostas = iter(
+            (
+                ("C1", "Cliente Um", TipoVertice.CLIENTE),
+                ("C2", "Cliente Dois", TipoVertice.CLIENTE),
+            )
+        )
+        with patch("ui.janela_principal.DialogoVertice") as dialogo:
+            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialogo.return_value.dados.side_effect = lambda: next(respostas)
+            self.assertEqual(
+                janela._criar_vertice_no_ponto((-0.35, -0.006, 0.065), TipoVertice.CLIENTE),
+                "C1",
+            )
+            self.assertEqual(
+                janela._criar_vertice_no_ponto((-0.20, -0.006, 0.065), TipoVertice.CLIENTE),
+                "C2",
+            )
+        self.assertEqual(
+            [cliente.identificador for cliente in janela.grafo.listar_clientes()],
+            ["C1", "C2"],
+        )
+        self.assertEqual(janela.lista_clientes.count(), 2)
+        self.assertEqual(janela.origem.count(), 3)
+        self.assertTrue(janela.botao_criar_rua.isEnabled())
+        self.assertFalse(janela.botao_definir_deposito.isEnabled())
+
+    def test_abre_cinco_clientes_exatamente_e_novo_nao_altera_arquivo(self) -> None:
+        janela = self.criar_janela_limpa()
+        grafo = Grafo()
+        grafo.adicionar_vertice(
+            Vertice("D", "Depósito salvo", TipoVertice.DEPOSITO, 0, 0)
+        )
+        grafo.definir_deposito("D")
+        posicoes = {"D": (0.0, 0.0, 0.0)}
+        for indice in range(1, 6):
+            identificador = f"C{indice}"
+            grafo.adicionar_vertice(
+                Vertice(
+                    identificador,
+                    f"Cliente {indice}",
+                    TipoVertice.CLIENTE,
+                    float(indice),
+                    0.0,
+                )
+            )
+            posicoes[identificador] = (float(indice), 0.0, 0.0)
+        projeto = ProjetoCidade(grafo=grafo, posicoes=posicoes)
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = Path(pasta) / "cinco-clientes.json"
+            salvar_projeto_cidade(projeto, caminho)
+            conteudo_original = caminho.read_bytes()
+            self.assertTrue(janela.abrir_projeto(caminho))
+            self.assertEqual(len(janela.grafo.listar_clientes()), 5)
+            self.assertEqual(janela.projeto.posicoes, posicoes)
+            self.assertFalse(janela.projeto_modificado)
+            janela.visualizacao.modelos_preparados = True
+            janela._atualizar_estado_cena("Modelos preparados", True)
+            self.assertEqual(len(janela.grafo.listar_clientes()), 5)
+            self.assertEqual(janela.projeto.posicoes, posicoes)
+            self.assertIsNone(janela.projeto.estacionamento_inicial)
+            self.assertFalse(janela.projeto_modificado)
+            self.assertTrue(janela.novo_cenario(confirmar=False))
+            self.assertEqual(caminho.read_bytes(), conteudo_original)
+        self.assertEqual(
+            [vertice.identificador for vertice in janela.grafo.listar_vertices()],
+            ["D"],
+        )
+        self.assertEqual(janela.grafo.listar_clientes(), [])
+        self.assertIsNone(janela.caminho_projeto)
+
+    def test_nova_janela_nao_restaura_ultimo_projeto(self) -> None:
+        primeira = self.criar_janela_limpa()
+        primeira.editor.criar_vertice(
+            "C1", "Cliente temporário", TipoVertice.CLIENTE, (-0.3, 0.0, 0.0)
+        )
+        segunda = self.criar_janela_limpa()
+        self.assertEqual(
+            [vertice.identificador for vertice in segunda.grafo.listar_vertices()],
+            ["D"],
+        )
 
     def test_inicializa_janela_unica_com_tres_regioes(self) -> None:
         janela = self.criar_janela()
@@ -200,7 +340,7 @@ class TestNovaInterface(unittest.TestCase):
         self.assertEqual(
             janela.cartao_percurso.valor.text(), "Nenhuma rota calculada"
         )
-        self.assertEqual(janela.cartao_clientes.valor.text(), "0")
+        self.assertEqual(janela.cartao_clientes.valor.text(), "0 / 0")
 
     def test_selecao_individual_e_selecionar_todos_clientes(self) -> None:
         janela = self.criar_janela()
@@ -305,7 +445,7 @@ class TestNovaInterface(unittest.TestCase):
         janela = self.criar_janela()
         janela.seletor_algoritmo.setCurrentIndex(1)
         janela.selecionar_todos_clientes.setChecked(False)
-        janela.botao_calcular.click()
+        janela._calcular_rota()
         self.assertIsNone(janela.rota_calculada)
         self.assertIn("pelo menos um cliente", janela.cartao_status.valor.text())
         self.assertIn("pelo menos um cliente", janela.resultado_calibracao.text())
@@ -593,6 +733,70 @@ class TestNovaInterface(unittest.TestCase):
         self.assertEqual(janela.visualizacao.origem_ultimo_pick, "cidade")
         self.assertEqual(recebidos[-1][3:5], ("wh_plane_0", "plane"))
 
+    def test_opengl_fluxo_visual_do_cenario_inicial(self) -> None:
+        """Exercita A–E com os GLBs reais quando há um backend OpenGL."""
+        janela = self.criar_janela_limpa()
+        janela.resize(1366, 768)
+        self.aplicacao.processEvents()
+        janela.visualizacao.inicializar()
+        for _ in range(40):
+            self.aplicacao.processEvents()
+            QTest.qWait(15)
+        if not janela.visualizacao.renderizacao_real_disponivel:
+            self.skipTest("O backend atual não oferece Qt Quick 3D/OpenGL real.")
+
+        self.assertTrue(janela.visualizacao.modelos_visiveis_na_cena)
+        self.assertIsNotNone(janela.visualizacao.mapa_trafegabilidade)
+        self.assertEqual(len(janela.grafo.listar_vertices()), 1)
+        self.assertEqual(janela.grafo.listar_clientes(), [])
+        self.assertIsNone(janela.rota_calculada)
+        estacionamento = janela.projeto.estacionamento_inicial
+        self.assertIsNotNone(estacionamento)
+        self.assertTrue(estacionamento.validado)
+        self.assertEqual(janela.visualizacao.posicao_carro, estacionamento.posicao)
+        self.assertEqual(
+            janela.visualizacao.orientacao_carro,
+            estacionamento.orientacao_graus,
+        )
+
+        alvo = (-0.30, estacionamento.posicao[1], 0.065)
+        validacao = janela.visualizacao.validar_posicao_trafegavel(alvo)
+        self.assertTrue(validacao.valido, validacao.motivo)
+        tela_x, tela_y, profundidade = janela.visualizacao.projetar_ponto(alvo)
+        self.assertGreater(profundidade, 0)
+        janela._ativar_adicao(TipoVertice.CLIENTE)
+
+        def cadastrar() -> None:
+            dialogo = QApplication.activeModalWidget()
+            if isinstance(dialogo, DialogoVertice):
+                dialogo.identificador.setText("C1")
+                dialogo.nome.setText("Cliente pelo mouse")
+                dialogo.accept()
+
+        QTimer.singleShot(0, cadastrar)
+        QTest.mouseClick(
+            janela.visualizacao,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(round(tela_x), round(tela_y)),
+        )
+        for _ in range(12):
+            self.aplicacao.processEvents()
+            QTest.qWait(10)
+        self.assertEqual(
+            [cliente.identificador for cliente in janela.grafo.listar_clientes()],
+            ["C1"],
+        )
+        self.assertGreaterEqual(janela.origem.findData("C1"), 0)
+
+        caminho = Path(__file__).parents[1] / "delivery-route-5-entregas.json"
+        conteudo_original = caminho.read_bytes()
+        self.assertTrue(janela.abrir_projeto(caminho))
+        self.assertEqual(len(janela.grafo.listar_clientes()), 5)
+        self.assertTrue(janela.novo_cenario(confirmar=False))
+        self.assertEqual(len(janela.grafo.listar_vertices()), 1)
+        self.assertEqual(janela.grafo.listar_clientes(), [])
+        self.assertEqual(caminho.read_bytes(), conteudo_original)
+
     def test_grafico_real_seleciona_e_arrasta_controle_sem_salvar(self) -> None:
         janela = self.criar_janela()
         janela.resize(1366, 768)
@@ -730,6 +934,7 @@ class TestNovaInterface(unittest.TestCase):
             janela = JanelaPrincipal(
                 conversor=ConversorBalsam(cache),
                 auto_inicializar_3d=False,
+                projeto_inicial=ProjetoCidade(grafo=criar_cenario_exemplo()),
             )
             janela.show()
             self.addCleanup(self._fechar, janela)
@@ -746,7 +951,11 @@ class TestNovaInterface(unittest.TestCase):
             self.assertIsNotNone(visualizacao.info_cidade)
             self.assertIsNotNone(visualizacao.info_carro)
             self.assertTrue(visualizacao.modelos_visiveis_na_cena)
-            self.assertTrue(all(botao.isEnabled() for botao in janela.botoes_edicao))
+            self.assertTrue(janela.botao_navegar.isEnabled())
+            self.assertTrue(janela.botao_adicionar_ponto.isEnabled())
+            self.assertTrue(janela.botao_adicionar_cliente.isEnabled())
+            self.assertFalse(janela.botao_definir_deposito.isEnabled())
+            self.assertTrue(janela.botao_criar_rua.isEnabled())
             recebidos = []
             visualizacao.ponto_selecionado.connect(lambda *dados: recebidos.append(dados))
             visualizacao.rootObject().pontoSelecionado.emit(

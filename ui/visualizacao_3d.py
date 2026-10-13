@@ -165,20 +165,29 @@ class Visualizacao3D(QQuickWidget):
 
             self.info_cidade = inspecionar_modelo(self.caminho_cidade)
             self.info_carro = inspecionar_modelo(self.caminho_carro)
-            self.resultado_reconhecimento = reconhecer_superficies(
-                self.caminho_cidade,
-                escala=self.escala_cidade,
-                progresso=self._progresso_reconhecimento,
-            )
-            self.mapa_trafegabilidade = self.resultado_reconhecimento.mapa
-            resumo = self.resultado_reconhecimento.estatisticas
-            origem_mapa = (
-                "cache" if self.resultado_reconhecimento.veio_do_cache else "GLB"
-            )
-            self._registrar(
-                "Mapa viário automático pronto "
-                f"({origem_mapa}): {resumo.get(TipoRegiao.RUA, 0)} células de rua."
-            )
+            try:
+                self.resultado_reconhecimento = reconhecer_superficies(
+                    self.caminho_cidade,
+                    escala=self.escala_cidade,
+                    progresso=self._progresso_reconhecimento,
+                )
+            except (OSError, TypeError, ValueError, RuntimeError) as erro:
+                self.resultado_reconhecimento = None
+                self.mapa_trafegabilidade = None
+                self._registrar(
+                    "Reconhecimento automático indisponível; a cidade continuará "
+                    f"com seleção visual restrita ao asfalto: {erro}"
+                )
+            else:
+                self.mapa_trafegabilidade = self.resultado_reconhecimento.mapa
+                resumo = self.resultado_reconhecimento.estatisticas
+                origem_mapa = (
+                    "cache" if self.resultado_reconhecimento.veio_do_cache else "GLB"
+                )
+                self._registrar(
+                    "Mapa viário automático pronto "
+                    f"({origem_mapa}): {resumo.get(TipoRegiao.RUA, 0)} células de rua."
+                )
             conversor = self.conversor or ConversorBalsam()
             self.conversor = conversor
             self._registrar("Preparando cidade.glb e carro.glb no cache Balsam…")

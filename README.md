@@ -11,6 +11,13 @@ no grafo editado e seus percursos espaciais são destacados na cidade. Uma
 missão animada move o carro real pelas polilinhas calibradas, registra entregas
 e oferece câmera de perseguição.
 
+Ao abrir a interface, a cidade começa em um estado mínimo: somente o depósito
+`D — Depósito Central`, nenhum cliente, nenhuma conexão fictícia e nenhuma
+rota. O carro usa uma vaga independente, validada sobre a pista do GLB. A
+configuração espacial desse estado fica em
+`assets/config/cidade-inicial.json`; o exemplo acadêmico de `main.py` continua
+separado e inalterado.
+
 ## Requisitos
 
 - Python 3.10 ou mais recente;
@@ -56,6 +63,7 @@ python3 main.py
 │   ├── dijkstra.py
 │   └── caixeiro_viajante.py
 ├── models/
+│   ├── cenario_inicial.py     # estado mínimo e configuração da GUI
 │   ├── grafo.py
 │   ├── missao.py             # movimento, estados, progresso e entregas
 │   ├── persistencia.py
@@ -76,9 +84,11 @@ python3 main.py
 │   ├── tema.py               # paleta azul-marinho e estilos
 │   └── visualizacao_3d.py    # ponte QWidget/Qt Quick 3D
 ├── tests/
-├── assets/models/
-│   ├── cidade.glb
-│   └── carro.glb
+├── assets/
+│   ├── config/cidade-inicial.json
+│   └── models/
+│       ├── cidade.glb
+│       └── carro.glb
 ├── gui_main.py
 └── main.py
 ```
@@ -97,6 +107,13 @@ layout foi verificado em 1920×1080, 1366×768, 1280×720 e 960×640.
 
 Os controles da câmera, do enquadramento, da seção **Editar cidade**, do
 cálculo de rotas e da missão animada são funcionais.
+
+Use **Adicionar cliente** e clique no asfalto para cadastrar o primeiro local
+de entrega. **Criar rua** passa a ficar disponível quando houver ao menos dois
+pontos. Dijkstra permanece bloqueado até existirem extremos distintos e o TSP
+informa que é necessário adicionar um cliente. **Abrir** restaura exatamente o
+projeto escolhido; **Novo** volta ao estado mínimo sem alterar o arquivo aberto.
+Nenhuma sessão anterior é restaurada automaticamente.
 
 ### Editor visual
 

@@ -1,0 +1,16 @@
+{
+  "formato": "delivery-route-cidade-inicial",
+  "versao": 1,
+  "modelo_cidade": "assets/models/cidade.glb",
+  "sha256_cidade": "6af0a41563b1ad48ddb60b83edbb5d2ea6d58189ebcb093887620ee0ef851d35",
+  "deposito": {
+    "identificador": "D",
+    "nome": "Depósito Central",
+    "posicao": [-0.55, -0.006227047208837454, 0.065]
+  },
+  "estacionamento": {
+    "posicao": [-0.47, -0.006227047208837121, 0.065],
+    "orientacao_graus": -90.0,
+    "superficie": "wh_plane_0|plane"
+  }
+}
