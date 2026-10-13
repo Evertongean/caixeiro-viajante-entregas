@@ -18,6 +18,7 @@ try:
     from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
     from models.grafo import Grafo, TipoVertice, Vertice, criar_cenario_exemplo
+    from models.missao import EstadoMissao, FaseMovimento, TipoEventoMissao
     from ui.assets_3d import ConversorBalsam
     from ui.camera_orbital import ModoCamera
     from ui.janela_principal import JanelaPrincipal
@@ -346,7 +347,7 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIsNone(janela.animacao_missao)
         self.assertIsNone(janela.controlador_missao)
 
-    def test_reiniciar_e_concluir_missao_recolocam_carro_no_deposito(self) -> None:
+    def test_reinicio_volta_a_vaga_e_dijkstra_conclui_no_destino(self) -> None:
         janela = self.criar_janela()
         janela.visualizacao.modelos_preparados = True
         janela.projeto.posicoes = {
@@ -371,6 +372,7 @@ class TestNovaInterface(unittest.TestCase):
         quadro_movido = janela.controlador_missao.avancar(1.0)
         janela._atualizar_quadro_missao(quadro_movido, 1.0)
         self.assertNotEqual(janela.visualizacao.posicao_carro, vaga)
+        self.assertIn("unid./s", janela.indicador_velocidade.text())
         janela._reiniciar_missao()
         janela.animacao_missao.timer.stop()
         self.assertEqual(janela.controlador_missao.quadro().posicao, vaga)
@@ -382,6 +384,9 @@ class TestNovaInterface(unittest.TestCase):
         janela._atualizar_quadro_missao(concluido, 10.0)
         self.assertNotEqual(janela.visualizacao.posicao_carro, vaga)
         janela._missao_concluida(janela.controlador_missao.resumo())
+        self.assertEqual(janela.visualizacao.posicao_carro, (3.0, 0.0, 0.0))
+        self.assertIn("Missão concluída", janela.indicador_velocidade.text())
+        janela._encerrar_missao()
         self.assertEqual(janela.visualizacao.posicao_carro, vaga)
 
     def test_qml_camera_de_perseguicao_nao_usa_deslocamento_fixo(self) -> None:
@@ -988,6 +993,77 @@ class TestNovaInterface(unittest.TestCase):
         self.assertEqual(
             janela.projeto.geometria_rua(*chave).pontos_intermediarios, []
         )
+
+    def test_opengl_missao_tem_dinamica_curvas_entregas_e_4x(self) -> None:
+        """Demonstra A–G com cidade, carro, câmera e renderização reais."""
+        janela = self.criar_janela_limpa()
+        janela.resize(1366, 768)
+        self.aplicacao.processEvents()
+        janela.visualizacao.inicializar()
+        for _ in range(40):
+            self.aplicacao.processEvents()
+            QTest.qWait(15)
+        if not janela.visualizacao.renderizacao_real_disponivel:
+            self.skipTest("O backend atual não oferece Qt Quick 3D/OpenGL real.")
+
+        caminho = (
+            Path(__file__).parents[1]
+            / "delivery-route-cidade-completa-corrigida.json"
+        )
+        self.assertTrue(janela.abrir_projeto(caminho))
+        indice_tsp = janela.seletor_algoritmo.findData("tsp")
+        janela.seletor_algoritmo.setCurrentIndex(indice_tsp)
+        janela.selecionar_todos_clientes.setChecked(True)
+        janela.botao_calcular.click()
+        self.assertTrue(janela.botao_iniciar.isEnabled())
+        janela.botao_iniciar.click()
+        janela.animacao_missao.timer.stop()
+        janela.seletor_velocidade.setCurrentIndex(3)
+
+        inicial = janela.controlador_missao.quadro()
+        estacionamento = janela.projeto.estacionamento_inicial
+        self.assertEqual(inicial.velocidade_atual, 0.0)
+        self.assertEqual(inicial.posicao, estacionamento.posicao)
+        self.assertEqual(
+            janela.visualizacao.camera.modo, ModoCamera.ATRAS_DO_CARRO
+        )
+
+        fases = {inicial.fase_movimento}
+        entregas: list[str] = []
+        quadro = inicial
+        for indice in range(1_000):
+            quadro = janela.controlador_missao.avancar(0.05)
+            janela._atualizar_quadro_missao(quadro, 0.05)
+            fases.add(quadro.fase_movimento)
+            entregas.extend(
+                evento.vertice
+                for evento in quadro.eventos
+                if evento.tipo is TipoEventoMissao.ENTREGA
+            )
+            if indice % 8 == 0:
+                self.aplicacao.processEvents()
+            if quadro.estado is EstadoMissao.CONCLUIDA:
+                break
+
+        self.assertEqual(quadro.estado, EstadoMissao.CONCLUIDA)
+        self.assertTrue(
+            {
+                FaseMovimento.ACELERANDO,
+                FaseMovimento.FREANDO_CURVA,
+                FaseMovimento.EM_CURVA,
+                FaseMovimento.FREANDO_ENTREGA,
+                FaseMovimento.ENTREGANDO,
+                FaseMovimento.RETOMANDO,
+                FaseMovimento.FREANDO_DESTINO,
+                FaseMovimento.CONCLUIDO,
+            }.issubset(fases)
+        )
+        self.assertEqual(len(entregas), 5)
+        self.assertEqual(len(set(entregas)), 5)
+        self.assertEqual(quadro.posicao, estacionamento.posicao)
+        self.assertEqual(janela.visualizacao.posicao_carro, estacionamento.posicao)
+        self.assertTrue(janela.visualizacao.camera_seguidora.inicializada)
+        self.assertIn("0.000 unid./s", janela.indicador_velocidade.text())
 
     def test_sincronizacao_nao_recria_campos_quando_grafo_nao_mudou(self) -> None:
         janela = self.criar_janela()

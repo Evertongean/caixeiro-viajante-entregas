@@ -309,8 +309,8 @@ class TestEditorCidade3D(unittest.TestCase):
         missao = ControladorMissao(rota, velocidade_base=10.0)
         missao.iniciar()
         visitados = [missao.quadro().posicao]
-        for _ in range(20):
-            visitados.append(missao.avancar(0.05).posicao)
+        for _ in range(2_000):
+            visitados.append(missao.avancar(0.005).posicao)
             if not missao.ativo:
                 break
         self.assertTrue(

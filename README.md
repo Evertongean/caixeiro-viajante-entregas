@@ -216,14 +216,29 @@ do carro deve estar validada e vinculada a ele. O botão não
 recalcula Dijkstra ou TSP: ele consome o resultado exibido. Ruas pendentes são
 listadas e precisam ser corrigidas no editor antes da animação.
 
-O controlador independente de Qt avança com o delta de tempo e interpola cada
-par de pontos da polilinha. Ele preserva cruzamentos, curvas, sentidos inversos
-e repetições de arestas. A distância mostrada em quilômetros continua sendo o
-peso oficial do grafo, distribuído proporcionalmente ao avanço geométrico em
-cada aresta. O `QTimer` apenas fornece quadros sem bloquear a interface.
+O controlador independente de Qt integra o movimento com o delta de tempo em
+subpassos de até 1/120 s. Ele parte com velocidade zero, acelera gradualmente,
+antecipa curvas e paradas pela geometria à frente e limita cada deslocamento ao
+próximo ponto de parada. Assim, quadros longos e o modo 4× não ultrapassam um
+cliente. Cruzamentos, sentidos inversos e repetições de arestas continuam
+preservados. A distância mostrada em quilômetros permanece sendo o peso
+oficial do grafo, distribuído proporcionalmente ao avanço geométrico; a nova
+cinemática atua somente nas unidades espaciais da cena.
+
+Mudanças de direção inferiores a 12° são consideradas colineares. Curvas
+suaves, moderadas, fechadas e retornos em U usam, respectivamente, 85%, 62%,
+40% e 22% da velocidade máxima. A frenagem começa antes do vértice pela relação
+`(v² - v_alvo²) / (2 × desaceleração)`. Os valores padrão de aceleração,
+desaceleração confortável e frenagem máxima são derivados da velocidade máxima
+e podem ser substituídos ao construir `ControladorMissao`, sem alterar Dijkstra,
+TSP ou os pesos do grafo.
 
 Durante a execução é possível pausar, continuar, reiniciar, encerrar e escolher
-0,5×, 1×, 2× ou 4×. A edição e a abertura de outro projeto ficam bloqueadas até
+0,5×, 1×, 2× ou 4×. Esses fatores escalam o tempo da simulação, inclusive
+aceleração, frenagem e espera de entrega. Uma linha discreta mostra a velocidade
+atual em unidades espaciais por segundo e a fase do movimento; não é exibido
+km/h porque a escala temporal da cena não representa velocidade rodoviária
+real. A edição e a abertura de outro projeto ficam bloqueadas até
 **Encerrar missão**, inclusive depois de uma conclusão natural. Reiniciar leva
 o carro à origem e limpa as entregas. O painel apresenta o trecho atual,
 distâncias percorrida/restante, clientes atendidos e, ao final, um resumo com
@@ -231,7 +246,10 @@ algoritmo, alvos, ordem TSP e tempo da simulação.
 
 No TSP, uma entrega só ocorre ao alcançar o próximo cliente da ordem oficial;
 passagens incidentais não contam. O carro aguarda aproximadamente um segundo e
-retorna ao depósito ao final. Dijkstra registra somente a chegada ao destino.
+retoma o percurso acelerando a partir do repouso. Ao final, o TSP percorre o
+pequeno trecho entre o depósito lógico e sua vaga e para nela sem teletransporte.
+Dijkstra registra somente a chegada e permanece parado no próprio destino; ao
+encerrar a sessão, o carro volta à vaga do depósito.
 Trechos percorridos ficam cinza, o atual amarelo e os restantes preservam o
 destaque ciano.
 

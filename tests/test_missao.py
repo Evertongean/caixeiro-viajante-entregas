@@ -1,13 +1,16 @@
-"""Testes do movimento, entregas e câmera da missão 3D."""
+"""Testes do movimento dinâmico, entregas e câmera da missão 3D."""
 
 from __future__ import annotations
 
 import unittest
+from math import cos, radians, sin
 
 from models.missao import (
     ControladorMissao,
     ErroMissao,
     EstadoMissao,
+    FaseMovimento,
+    TipoCurva,
     TipoEventoMissao,
 )
 from models.rota import (
@@ -50,99 +53,333 @@ def criar_rota(
     )
 
 
+def avancar_ate(
+    missao: ControladorMissao,
+    condicao,
+    *,
+    passo: float = 0.01,
+    limite: int = 20_000,
+):
+    quadro = missao.quadro()
+    for _ in range(limite):
+        if condicao(quadro):
+            return quadro
+        quadro = missao.avancar(passo)
+    raise AssertionError("A condição esperada não ocorreu durante a missão.")
+
+
 class TestControladorMissao(unittest.TestCase):
-    def test_interpola_por_delta_e_converte_distancia_oficial_na_aresta(self) -> None:
-        rota = criar_rota(
-            [("A", "B", 10.0, ((0, 0, 0), (1, 0, 0), (3, 0, 0)))]
+    def test_parte_parado_acelera_progressivamente_e_respeita_maxima(self) -> None:
+        rota = criar_rota([("A", "B", 20, ((0, 0, 0), (20, 0, 0)))])
+        missao = ControladorMissao(
+            rota,
+            velocidade_base=2.0,
+            aceleracao=1.0,
+            desaceleracao_conforto=2.0,
+            frenagem_maxima=4.0,
         )
-        missao = ControladorMissao(rota, velocidade_base=1.0)
-        missao.iniciar()
-        quadro = missao.avancar(1.5)
-        self.assertEqual(quadro.posicao, (1.5, 0.0, 0.0))
-        self.assertAlmostEqual(quadro.progresso_aresta, 0.5)
-        self.assertAlmostEqual(quadro.distancia_percorrida, 5.0)
-        self.assertAlmostEqual(quadro.distancia_restante, 5.0)
+        inicial = missao.iniciar()
+        self.assertEqual(inicial.velocidade_atual, 0.0)
+        self.assertEqual(inicial.fase_movimento, FaseMovimento.ACELERANDO)
+        primeira = missao.avancar(0.2)
+        segunda = missao.avancar(0.2)
+        self.assertGreater(primeira.velocidade_atual, 0.0)
+        self.assertGreater(segunda.velocidade_atual, primeira.velocidade_atual)
+        cruzeiro = missao.avancar(3.0)
+        self.assertLessEqual(cruzeiro.velocidade_atual, 2.0)
+        self.assertAlmostEqual(cruzeiro.velocidade_atual, 2.0)
 
-    def test_percorre_curvas_arestas_reversas_e_repetidas_sem_pular(self) -> None:
-        rota = criar_rota(
-            [
-                ("D", "C", 2, ((0, 0, 0), (1, 0, 0), (1, 0, 1))),
-                ("C", "D", 2, ((1, 0, 1), (1, 0, 0), (0, 0, 0))),
-            ]
+    def test_classifica_curvas_e_ignora_pontos_quase_colineares(self) -> None:
+        def rota_com_angulo(valor: float) -> RotaCalculada:
+            angulo = radians(valor)
+            return criar_rota(
+                [
+                    (
+                        "A",
+                        "B",
+                        2,
+                        (
+                            (0, 0, 0),
+                            (1, 0, 0),
+                            (1 + cos(angulo), 0, sin(angulo)),
+                        ),
+                    )
+                ]
+            )
+
+        suave = rota_com_angulo(25)
+        moderada = rota_com_angulo(60)
+        fechada = criar_rota(
+            [("A", "B", 2, ((0, 0, 0), (1, 0, 0), (1, 0, 1)))]
         )
-        missao = ControladorMissao(rota, velocidade_base=1.0)
-        missao.iniciar()
-        self.assertEqual(missao.avancar(1.0).posicao, (1.0, 0.0, 0.0))
-        meio = missao.avancar(1.5)
-        self.assertEqual(meio.indice_aresta, 1)
-        self.assertEqual(meio.posicao, (1.0, 0.0, 0.5))
-        fim = missao.avancar(1.5)
-        self.assertEqual(fim.estado, EstadoMissao.CONCLUIDA)
-        self.assertEqual(fim.posicao, (0.0, 0.0, 0.0))
-        self.assertEqual(fim.distancia_percorrida, 4.0)
-        resumo = missao.resumo()
-        self.assertTrue(resumo.concluida)
-        self.assertEqual(resumo.origem, "D")
-        self.assertEqual(resumo.destino, "D")
-        self.assertEqual(resumo.distancia_percorrida, 4.0)
+        retorno = rota_com_angulo(170)
+        quase_reta = criar_rota(
+            [("A", "B", 2, ((0, 0, 0), (1, 0, 0), (2, 0, 0.1)))]
+        )
+        self.assertEqual(
+            ControladorMissao(suave).curvas_detectadas[0].tipo,
+            TipoCurva.SUAVE,
+        )
+        self.assertEqual(
+            ControladorMissao(moderada).curvas_detectadas[0].tipo,
+            TipoCurva.MODERADA,
+        )
+        curva_90 = ControladorMissao(fechada).curvas_detectadas[0]
+        self.assertEqual(curva_90.tipo, TipoCurva.FECHADA)
+        self.assertAlmostEqual(curva_90.angulo_graus, 90.0)
+        self.assertEqual(
+            ControladorMissao(retorno).curvas_detectadas[0].tipo,
+            TipoCurva.RETORNO,
+        )
+        self.assertEqual(ControladorMissao(quase_reta).curvas_detectadas, ())
 
-    def test_orientacao_gira_pelo_menor_arco_sem_salto_na_curva(self) -> None:
+    def test_freia_antes_da_curva_reduz_na_esquina_e_acelera_depois(self) -> None:
         rota = criar_rota(
-            [("A", "B", 2, ((0, 0, 0), (0, 0, 1), (1, 0, 1)))]
+            [("A", "B", 6, ((0, 0, 0), (2, 0, 0), (2, 0, 4)))]
         )
         missao = ControladorMissao(
-            rota, velocidade_base=1.0, velocidade_rotacao=45.0
+            rota,
+            velocidade_base=1.0,
+            aceleracao=2.0,
+            desaceleracao_conforto=1.0,
+            frenagem_maxima=3.0,
         )
         missao.iniciar()
-        self.assertEqual(missao.avancar(1.0).orientacao_graus, 0.0)
-        curva = missao.avancar(0.5)
-        self.assertAlmostEqual(curva.orientacao_graus, 22.5)
-        self.assertEqual(curva.posicao, (0.5, 0.0, 1.0))
+        frenando = avancar_ate(
+            missao,
+            lambda q: q.fase_movimento is FaseMovimento.FREANDO_CURVA,
+        )
+        self.assertLess(frenando.posicao[0], 2.0)
+        self.assertGreater(frenando.distancia_proxima_curva, 0.0)
+        velocidade_antes = frenando.velocidade_atual
+        curva = avancar_ate(
+            missao,
+            lambda q: q.fase_movimento is FaseMovimento.EM_CURVA,
+        )
+        self.assertLessEqual(curva.velocidade_atual, 0.41)
+        self.assertLess(curva.velocidade_atual, velocidade_antes)
+        depois = avancar_ate(
+            missao,
+            lambda q: q.posicao[2] > 0.5,
+        )
+        self.assertGreater(depois.velocidade_atual, curva.velocidade_atual)
 
-    def test_velocidade_pausa_continuacao_reinicio_e_encerramento(self) -> None:
-        rota = criar_rota([("A", "B", 4, ((0, 0, 0), (4, 0, 0)))])
-        missao = ControladorMissao(rota, velocidade_base=1.0)
-        missao.multiplicador_velocidade = 2.0
+    def test_orientacao_muda_pelo_menor_arco_sem_salto(self) -> None:
+        rota = criar_rota(
+            [("A", "B", 4, ((0, 0, 0), (2, 0, 0), (2, 0, 2)))]
+        )
+        missao = ControladorMissao(
+            rota,
+            velocidade_base=1.0,
+            velocidade_rotacao=45.0,
+        )
         missao.iniciar()
-        self.assertEqual(missao.avancar(0.5).posicao, (1.0, 0.0, 0.0))
-        missao.pausar()
-        self.assertEqual(missao.avancar(10).posicao, (1.0, 0.0, 0.0))
-        missao.continuar()
-        self.assertEqual(missao.avancar(0.5).posicao, (2.0, 0.0, 0.0))
-        reinicio = missao.reiniciar()
-        self.assertEqual(reinicio.posicao, (0.0, 0.0, 0.0))
-        self.assertEqual(reinicio.distancia_percorrida, 0.0)
-        self.assertEqual(missao.encerrar().estado, EstadoMissao.ENCERRADA)
+        antes = avancar_ate(missao, lambda q: q.posicao[0] > 1.95)
+        depois = avancar_ate(missao, lambda q: q.posicao[2] > 0.03)
+        self.assertGreaterEqual(antes.orientacao_graus, 0.0)
+        self.assertLess(depois.orientacao_graus, 90.0)
+        self.assertGreater(depois.orientacao_graus, -1e-6)
 
-    def test_tsp_entrega_na_ordem_sem_contar_passagem_incidental(self) -> None:
+    def test_reta_nao_freia_antes_da_zona_do_destino(self) -> None:
+        rota = criar_rota([("A", "B", 10, ((0, 0, 0), (10, 0, 0)))])
+        missao = ControladorMissao(rota, velocidade_base=1.0)
+        missao.iniciar()
+        quadro = avancar_ate(missao, lambda q: q.posicao[0] > 5.0)
+        self.assertAlmostEqual(quadro.velocidade_atual, 1.0)
+        self.assertEqual(quadro.fase_movimento, FaseMovimento.CRUZEIRO)
+
+    def test_dijkstra_freia_para_exatamente_no_destino_sem_ultrapassar(self) -> None:
+        rota = criar_rota([("A", "B", 3, ((0, 0, 0), (3, 0, 0)))])
+        missao = ControladorMissao(rota, velocidade_base=2.0)
+        missao.multiplicador_velocidade = 4.0
+        missao.iniciar()
+        fim = missao.avancar(10.0)
+        self.assertEqual(fim.estado, EstadoMissao.CONCLUIDA)
+        self.assertEqual(fim.posicao, (3, 0, 0))
+        self.assertEqual(fim.velocidade_atual, 0.0)
+        self.assertEqual(fim.distancia_destino_final, 0.0)
+        self.assertEqual(fim.fase_movimento, FaseMovimento.CONCLUIDO)
+        self.assertEqual(
+            [evento.tipo for evento in fim.eventos],
+            [TipoEventoMissao.CONCLUSAO],
+        )
+
+    def test_tsp_para_registra_uma_vez_aguarda_e_retoma_acelerando(self) -> None:
         rota = criar_rota(
             [
-                ("D", "B", 1, ((0, 0, 0), (1, 0, 0))),
-                ("B", "A", 1, ((1, 0, 0), (2, 0, 0))),
-                ("A", "B", 1, ((2, 0, 0), (1, 0, 0))),
-                ("B", "D", 1, ((1, 0, 0), (0, 0, 0))),
+                ("D", "A", 1, ((0, 0, 0), (1, 0, 0))),
+                ("A", "D", 1, ((1, 0, 0), (0, 0, 0))),
             ],
             algoritmo=AlgoritmoRota.TSP,
-            ordem=("D", "A", "B", "D"),
-            clientes=("A", "B"),
+            ordem=("D", "A", "D"),
+            clientes=("A",),
         )
         missao = ControladorMissao(
             rota, velocidade_base=1.0, tempo_parada_entrega=1.0
         )
         missao.iniciar()
-        incidental = missao.avancar(1.0)
-        self.assertEqual(incidental.clientes_atendidos, ())
-        entrega_a = missao.avancar(1.0)
-        self.assertEqual(entrega_a.clientes_atendidos, ("A",))
-        self.assertEqual(entrega_a.estado, EstadoMissao.EM_ENTREGA)
-        self.assertEqual(entrega_a.eventos[0].tipo, TipoEventoMissao.ENTREGA)
-        missao.avancar(1.0)
-        entrega_b = missao.avancar(1.0)
-        self.assertEqual(entrega_b.clientes_atendidos, ("A", "B"))
-        missao.avancar(1.0)
-        fim = missao.avancar(1.0)
-        self.assertEqual(fim.estado, EstadoMissao.CONCLUIDA)
-        self.assertEqual(fim.posicao, (0.0, 0.0, 0.0))
+        entrega = avancar_ate(
+            missao,
+            lambda q: q.estado is EstadoMissao.EM_ENTREGA,
+        )
+        self.assertEqual(entrega.posicao, (1, 0, 0))
+        self.assertEqual(entrega.velocidade_atual, 0.0)
+        self.assertIsNone(entrega.distancia_proxima_entrega)
+        self.assertEqual(entrega.clientes_atendidos, ("A",))
+        self.assertEqual(entrega.eventos[0].tipo, TipoEventoMissao.ENTREGA)
+        parado = missao.avancar(0.5)
+        self.assertEqual(parado.posicao, (1, 0, 0))
+        retomada = missao.avancar(0.6)
+        self.assertEqual(retomada.clientes_atendidos, ("A",))
+        self.assertGreater(retomada.velocidade_atual, 0.0)
+        self.assertIn(
+            retomada.fase_movimento,
+            (FaseMovimento.RETOMANDO, FaseMovimento.EM_CURVA),
+        )
+        fim = avancar_ate(
+            missao, lambda q: q.estado is EstadoMissao.CONCLUIDA
+        )
+        self.assertEqual(fim.posicao, (0, 0, 0))
+        self.assertEqual(fim.clientes_atendidos, ("A",))
+
+    def test_tsp_retorna_freando_ate_a_vaga_sem_teletransporte(self) -> None:
+        rota = criar_rota(
+            [
+                ("D", "A", 1, ((0, 0, 0), (1, 0, 0))),
+                ("A", "D", 1, ((1, 0, 0), (0, 0, 0))),
+            ],
+            algoritmo=AlgoritmoRota.TSP,
+            ordem=("D", "A", "D"),
+            clientes=("A",),
+        )
+        vaga = (-0.2, 0.0, 0.0)
+        missao = ControladorMissao(
+            rota,
+            velocidade_base=1.0,
+            tempo_parada_entrega=0.0,
+            posicao_inicial=vaga,
+        )
+        missao.iniciar()
+        retorno = avancar_ate(
+            missao,
+            lambda q: (
+                q.fase_movimento is FaseMovimento.FREANDO_DESTINO
+                and q.distancia_percorrida == rota.distancia_total
+            ),
+        )
+        self.assertNotEqual(retorno.posicao, vaga)
+        fim = avancar_ate(
+            missao, lambda q: q.estado is EstadoMissao.CONCLUIDA
+        )
+        self.assertEqual(fim.posicao, vaga)
+        self.assertEqual(fim.velocidade_atual, 0.0)
+
+    def test_pausa_preserva_posicao_velocidade_e_fase_e_continua(self) -> None:
+        rota = criar_rota([("A", "B", 10, ((0, 0, 0), (10, 0, 0)))])
+        missao = ControladorMissao(rota, velocidade_base=1.0)
+        missao.iniciar()
+        acelerando = missao.avancar(0.2)
+        velocidade = acelerando.velocidade_atual
+        posicao = acelerando.posicao
+        pausado = missao.pausar()
+        self.assertEqual(pausado.fase_movimento, FaseMovimento.PAUSADO)
+        self.assertEqual(missao.avancar(5.0).posicao, posicao)
+        continuado = missao.continuar()
+        self.assertEqual(continuado.velocidade_atual, velocidade)
+        self.assertEqual(continuado.fase_movimento, acelerando.fase_movimento)
+        self.assertGreater(missao.avancar(0.1).posicao[0], posicao[0])
+
+    def test_pausa_durante_frenagem_e_reinicio_zeram_corretamente(self) -> None:
+        rota = criar_rota(
+            [("A", "B", 6, ((0, 0, 0), (2, 0, 0), (2, 0, 4)))]
+        )
+        missao = ControladorMissao(rota, velocidade_base=1.0)
+        missao.iniciar()
+        frenando = avancar_ate(
+            missao,
+            lambda q: q.fase_movimento is FaseMovimento.FREANDO_CURVA,
+        )
+        missao.pausar()
+        missao.continuar()
+        self.assertAlmostEqual(
+            missao.quadro().velocidade_atual, frenando.velocidade_atual
+        )
+        reinicio = missao.reiniciar()
+        self.assertEqual(reinicio.posicao, (0, 0, 0))
+        self.assertEqual(reinicio.velocidade_atual, 0.0)
+        self.assertEqual(reinicio.fase_movimento, FaseMovimento.ACELERANDO)
+
+    def test_multiplicadores_representam_tempo_simulado(self) -> None:
+        rota = criar_rota([("A", "B", 10, ((0, 0, 0), (10, 0, 0)))])
+        resultados = []
+        for multiplicador in (0.5, 1.0, 2.0, 4.0):
+            missao = ControladorMissao(rota, velocidade_base=1.0)
+            missao.multiplicador_velocidade = multiplicador
+            missao.iniciar()
+            quadro = missao.avancar(1.0 / multiplicador)
+            resultados.append((quadro.posicao, quadro.velocidade_atual))
+        for resultado in resultados[1:]:
+            self.assertAlmostEqual(resultado[0][0], resultados[0][0][0], places=8)
+            self.assertAlmostEqual(resultado[1], resultados[0][1], places=8)
+
+    def test_resultado_independe_da_variacao_de_fps(self) -> None:
+        rota = criar_rota([("A", "B", 10, ((0, 0, 0), (10, 0, 0)))])
+        uniforme = ControladorMissao(rota, velocidade_base=1.0)
+        variavel = ControladorMissao(rota, velocidade_base=1.0)
+        uniforme.iniciar()
+        variavel.iniciar()
+        for _ in range(100):
+            quadro_uniforme = uniforme.avancar(0.01)
+        for delta in (0.017, 0.033, 0.008, 0.042, 0.1, 0.2, 0.3, 0.3):
+            quadro_variavel = variavel.avancar(delta)
+        self.assertAlmostEqual(
+            quadro_uniforme.posicao[0], quadro_variavel.posicao[0], places=4
+        )
+        self.assertAlmostEqual(
+            quadro_uniforme.velocidade_atual,
+            quadro_variavel.velocidade_atual,
+            places=4,
+        )
+
+    def test_sentido_inverso_ruas_repetidas_e_distancia_preservada(self) -> None:
+        rota = criar_rota(
+            [
+                ("D", "C", 2, ((0, 0, 0), (1, 0, 0), (1, 0, 1))),
+                ("C", "D", 2, ((1, 0, 1), (1, 0, 0), (0, 0, 0))),
+            ],
+            algoritmo=AlgoritmoRota.TSP,
+            ordem=("D", "C", "D"),
+            clientes=("C",),
+        )
+        missao = ControladorMissao(
+            rota, velocidade_base=2.0, tempo_parada_entrega=0.0
+        )
+        missao.iniciar()
+        fim = avancar_ate(
+            missao, lambda q: q.estado is EstadoMissao.CONCLUIDA
+        )
+        self.assertEqual(fim.posicao, (0, 0, 0))
+        self.assertEqual(fim.distancia_percorrida, 4.0)
+        self.assertEqual(missao.resumo().distancia_percorrida, 4.0)
+
+    def test_formula_distancia_frenagem_e_parametros_invalidos(self) -> None:
+        rota = criar_rota([("A", "B", 10, ((0, 0, 0), (10, 0, 0)))])
+        missao = ControladorMissao(
+            rota,
+            velocidade_base=2.0,
+            aceleracao=4.0,
+            desaceleracao_conforto=2.0,
+            frenagem_maxima=4.0,
+        )
+        missao.iniciar()
+        avancar_ate(missao, lambda q: q.velocidade_atual == 2.0)
+        self.assertAlmostEqual(missao.distancia_frenagem(1.0), 0.75)
+        with self.assertRaisesRegex(ValueError, "frenagem máxima"):
+            ControladorMissao(
+                rota,
+                desaceleracao_conforto=2.0,
+                frenagem_maxima=1.0,
+            )
 
     def test_rejeita_calibracao_incompleta_e_rota_sem_movimento(self) -> None:
         incompleta = criar_rota(
@@ -156,32 +393,6 @@ class TestControladorMissao(unittest.TestCase):
         with self.assertRaisesRegex(ErroMissao, "comprimento espacial"):
             ControladorMissao(sem_movimento)
 
-    def test_transicao_da_vaga_ate_rota_e_continua_e_nao_altera_distancia(self) -> None:
-        rota = criar_rota([("D", "A", 2, ((0, 0, 0), (2, 0, 0)))])
-        missao = ControladorMissao(
-            rota,
-            velocidade_base=1.0,
-            posicao_inicial=(-0.5, 0, 0),
-            orientacao_inicial_graus=90.0,
-        )
-        self.assertEqual(missao.quadro().posicao, (-0.5, 0.0, 0.0))
-        missao.iniciar()
-        transicao = missao.avancar(0.25)
-        self.assertEqual(transicao.posicao, (-0.25, 0.0, 0.0))
-        self.assertEqual(transicao.distancia_percorrida, 0.0)
-        entrada = missao.avancar(0.5)
-        self.assertEqual(entrada.posicao, (0.25, 0.0, 0.0))
-        self.assertAlmostEqual(entrada.distancia_percorrida, 0.25)
-        reinicio = missao.reiniciar(iniciar=False)
-        self.assertEqual(reinicio.posicao, (-0.5, 0.0, 0.0))
-        self.assertEqual(reinicio.orientacao_graus, 90.0)
-        missao.iniciar()
-        missao.avancar(0.2)
-        encerrada = missao.encerrar()
-        self.assertEqual(encerrada.estado, EstadoMissao.ENCERRADA)
-        self.assertEqual(encerrada.posicao, (-0.5, 0.0, 0.0))
-        self.assertEqual(encerrada.orientacao_graus, 90.0)
-
 
 class TestCameraSeguidora(unittest.TestCase):
     def test_fica_atras_da_direcao_real_e_suaviza_mudanca(self) -> None:
@@ -193,6 +404,15 @@ class TestCameraSeguidora(unittest.TestCase):
         self.assertGreater(nova[2], -2.0)
         self.assertLess(nova[0], 0.0)
         self.assertNotEqual(nova, (-2.0, 1.0, 0.0))
+
+    def test_camera_permanece_estavel_quando_carro_freia(self) -> None:
+        camera = CameraSeguidora(distancia=2.0, altura=1.0, antecipacao=0.5)
+        camera.atualizar((0, 0, 0), 0, 0, imediato=True)
+        posicoes = []
+        for z in (0.20, 0.35, 0.44, 0.48, 0.50, 0.50):
+            posicao, _ = camera.atualizar((0, 0, z), 0, 0.05)
+            posicoes.append(posicao[2])
+        self.assertEqual(posicoes, sorted(posicoes))
 
 
 if __name__ == "__main__":

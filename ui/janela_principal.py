@@ -580,6 +580,11 @@ class JanelaPrincipal(QMainWindow):
         self.seletor_velocidade.setCurrentIndex(1)
         velocidade.addWidget(self.seletor_velocidade, 1)
         layout.addLayout(velocidade)
+        self.indicador_velocidade = QLabel(
+            "Velocidade: 0,000 unid./s · Parado"
+        )
+        self.indicador_velocidade.setObjectName("notaFutura")
+        layout.addWidget(self.indicador_velocidade)
 
         cameras = QGridLayout()
         self.botao_camera_livre = QPushButton("Câmera livre")
@@ -901,6 +906,10 @@ class JanelaPrincipal(QMainWindow):
         self.cartao_clientes.definir(
             f"{len(quadro.clientes_atendidos)} / {quadro.total_clientes}"
         )
+        self.indicador_velocidade.setText(
+            f"Velocidade: {quadro.velocidade_atual:.3f} unid./s · "
+            f"{quadro.fase_movimento.value.capitalize()}"
+        )
         if quadro.estado is EstadoMissao.PAUSADA:
             status = "Missão pausada."
         elif quadro.estado is EstadoMissao.EM_ENTREGA:
@@ -920,7 +929,7 @@ class JanelaPrincipal(QMainWindow):
             elif quadro.proximo_cliente is not None:
                 status = f"Seguindo para o cliente {quadro.proximo_cliente}."
             else:
-                status = "Em deslocamento."
+                status = quadro.fase_movimento.value.capitalize() + "."
         for evento in quadro.eventos:
             if evento.tipo is TipoEventoMissao.ENTREGA:
                 status = f"Entrega em {evento.vertice} confirmada."
@@ -928,7 +937,6 @@ class JanelaPrincipal(QMainWindow):
         self._atualizar_controles_missao()
 
     def _missao_concluida(self, resumo: ResumoMissao) -> None:
-        self._aplicar_pose_estacionamento()
         self.resumo_missao.setText(self._texto_resumo_missao(resumo))
         self._atualizar_controles_missao()
 
@@ -1127,6 +1135,9 @@ class JanelaPrincipal(QMainWindow):
         self.botao_limpar_rota.setEnabled(False)
         self.botao_enquadrar_rota.setEnabled(False)
         self.resumo_missao.setText("Calcule e calibre uma rota para iniciar.")
+        self.indicador_velocidade.setText(
+            "Velocidade: 0,000 unid./s · Parado"
+        )
         self._aplicar_pose_estacionamento()
         self._atualizar_controles_missao()
 
