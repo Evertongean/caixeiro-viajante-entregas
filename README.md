@@ -18,6 +18,12 @@ configuração espacial desse estado fica em
 `assets/config/cidade-inicial.json`; o exemplo acadêmico de `main.py` continua
 separado e inalterado.
 
+O carro permanece vinculado ao depósito ativo durante todo o ciclo do projeto.
+Ao usar **Definir depósito** em uma cidade que já possui depósito, o ponto
+existente é reposicionado e uma nova vaga próxima, inteiramente sobre a rua e
+alinhada à via, é calculada automaticamente. Reiniciar, concluir ou encerrar
+uma missão também devolve visualmente o veículo a essa vaga.
+
 ## Requisitos
 
 - Python 3.10 ou mais recente;
@@ -205,7 +211,8 @@ o resultado anterior e exige novo cálculo.
 
 **Iniciar missão** fica disponível somente quando há uma rota não trivial e
 todos os trechos usados possuem polilinhas confirmadas e válidas no mapa
-automático. O botão não
+automático. A rota da missão também precisa partir do depósito ativo e a vaga
+do carro deve estar validada e vinculada a ele. O botão não
 recalcula Dijkstra ou TSP: ele consome o resultado exibido. Ruas pendentes são
 listadas e precisam ser corrigidas no editor antes da animação.
 
@@ -322,6 +329,12 @@ ruas reconhecidas. As classificações antigas são aceitas e preservadas ao
 salvar, mas têm prioridade inferior ao reconhecimento atual. O carregamento é
 transacional: um JSON inválido não
 substitui o projeto aberto.
+
+Projetos anteriores que possuem depósito, mas não registram
+`estacionamento_inicial`, recebem automaticamente uma vaga próxima assim que o
+mapa viário 3D está pronto. Essa atualização fica marcada como não salva para
+que o arquivo original não seja sobrescrito sem ação explícita do usuário; no
+próximo salvamento, a relação carro–depósito passa a ser persistida normalmente.
 
 O cenário `delivery-route-cidade-completa-corrigida.json` mantém grafo, pesos e
 rede viária do original e acrescenta somente a vaga validada próxima a `D`.

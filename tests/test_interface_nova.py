@@ -23,6 +23,7 @@ try:
     from ui.janela_principal import JanelaPrincipal
     from models.projeto_cidade import (
         ClassificacaoSuperficie,
+        EstacionamentoVeiculo,
         GeometriaRua,
         ProjetoCidade,
         salvar_projeto_cidade,
@@ -57,6 +58,20 @@ class TestNovaInterface(unittest.TestCase):
         janela.close()
         janela.deleteLater()
         self.aplicacao.processEvents()
+
+    @staticmethod
+    def _vincular_carro_teste(
+        janela: JanelaPrincipal,
+        posicao: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> None:
+        deposito = janela.grafo.obter_deposito()
+        janela.projeto.estacionamento_inicial = EstacionamentoVeiculo(
+            deposito=deposito.identificador,
+            posicao=posicao,
+            orientacao_graus=90.0,
+            superficie="rua|teste",
+            validado=True,
+        )
 
     def criar_janela_limpa(self) -> JanelaPrincipal:
         janela = JanelaPrincipal(auto_inicializar_3d=False)
@@ -97,7 +112,7 @@ class TestNovaInterface(unittest.TestCase):
         self.assertTrue(janela.botao_navegar.isEnabled())
         self.assertTrue(janela.botao_adicionar_ponto.isEnabled())
         self.assertTrue(janela.botao_adicionar_cliente.isEnabled())
-        self.assertFalse(janela.botao_definir_deposito.isEnabled())
+        self.assertTrue(janela.botao_definir_deposito.isEnabled())
         self.assertFalse(janela.botao_criar_rua.isEnabled())
         self.assertEqual(
             janela.cartao_status.valor.text(),
@@ -131,7 +146,16 @@ class TestNovaInterface(unittest.TestCase):
         self.assertEqual(janela.lista_clientes.count(), 2)
         self.assertEqual(janela.origem.count(), 3)
         self.assertTrue(janela.botao_criar_rua.isEnabled())
-        self.assertFalse(janela.botao_definir_deposito.isEnabled())
+        self.assertTrue(janela.botao_definir_deposito.isEnabled())
+
+    def test_definir_deposito_existente_ativa_reposicionamento(self) -> None:
+        janela = self.criar_janela_limpa()
+        janela._editor_inicializado = True
+        janela._atualizar_disponibilidade_editor()
+        janela.botao_definir_deposito.click()
+        self.assertIs(janela.editor.modo, ModoEditor.REPOSICIONAR_VERTICE)
+        self.assertEqual(janela.editor.vertice_reposicionado, "D")
+        self.assertIn("carro será reposicionado", janela.instrucao_editor.text())
 
     def test_abre_cinco_clientes_exatamente_e_novo_nao_altera_arquivo(self) -> None:
         janela = self.criar_janela_limpa()
@@ -166,8 +190,12 @@ class TestNovaInterface(unittest.TestCase):
             janela._atualizar_estado_cena("Modelos preparados", True)
             self.assertEqual(len(janela.grafo.listar_clientes()), 5)
             self.assertEqual(janela.projeto.posicoes, posicoes)
-            self.assertIsNone(janela.projeto.estacionamento_inicial)
-            self.assertFalse(janela.projeto_modificado)
+            estacionamento = janela.projeto.estacionamento_inicial
+            self.assertIsNotNone(estacionamento)
+            self.assertEqual(estacionamento.deposito, "D")
+            self.assertEqual(estacionamento.posicao, posicoes["D"])
+            self.assertFalse(estacionamento.validado)
+            self.assertTrue(janela.projeto_modificado)
             self.assertTrue(janela.novo_cenario(confirmar=False))
             self.assertEqual(caminho.read_bytes(), conteudo_original)
         self.assertEqual(
@@ -284,6 +312,7 @@ class TestNovaInterface(unittest.TestCase):
             "B": (3.0, 0.0, 0.0),
             "C": (1.0, 0.0, 2.0),
         }
+        self._vincular_carro_teste(janela, janela.projeto.posicoes["D"])
         for origem, destino in (("D", "X"), ("X", "A"), ("A", "B")):
             janela.projeto.ruas[janela.projeto.chave_aresta(origem, destino)] = (
                 GeometriaRua(origem, destino, [], True)
@@ -316,6 +345,44 @@ class TestNovaInterface(unittest.TestCase):
         self.assertTrue(janela.botao_abrir_projeto.isEnabled())
         self.assertIsNone(janela.animacao_missao)
         self.assertIsNone(janela.controlador_missao)
+
+    def test_reiniciar_e_concluir_missao_recolocam_carro_no_deposito(self) -> None:
+        janela = self.criar_janela()
+        janela.visualizacao.modelos_preparados = True
+        janela.projeto.posicoes = {
+            "D": (0.0, 0.0, 0.0),
+            "X": (1.0, 0.0, 0.0),
+            "A": (2.0, 0.0, 0.0),
+            "B": (3.0, 0.0, 0.0),
+            "C": (1.0, 0.0, 2.0),
+        }
+        vaga = (-0.10, 0.0, 0.0)
+        self._vincular_carro_teste(janela, vaga)
+        for origem, destino in (("D", "X"), ("X", "A"), ("A", "B")):
+            janela.projeto.ruas[janela.projeto.chave_aresta(origem, destino)] = (
+                GeometriaRua(origem, destino, [], True)
+            )
+        janela.origem.setCurrentIndex(janela.origem.findData("D"))
+        janela.destino.setCurrentIndex(janela.destino.findData("B"))
+        janela.botao_calcular.click()
+        janela.botao_iniciar.click()
+        janela.animacao_missao.timer.stop()
+
+        quadro_movido = janela.controlador_missao.avancar(1.0)
+        janela._atualizar_quadro_missao(quadro_movido, 1.0)
+        self.assertNotEqual(janela.visualizacao.posicao_carro, vaga)
+        janela._reiniciar_missao()
+        janela.animacao_missao.timer.stop()
+        self.assertEqual(janela.controlador_missao.quadro().posicao, vaga)
+        self.assertEqual(janela.visualizacao.posicao_carro, vaga)
+
+        janela.controlador_missao.velocidade_base = 10.0
+        concluido = janela.controlador_missao.avancar(10.0)
+        self.assertEqual(concluido.estado.value, "concluida")
+        janela._atualizar_quadro_missao(concluido, 10.0)
+        self.assertNotEqual(janela.visualizacao.posicao_carro, vaga)
+        janela._missao_concluida(janela.controlador_missao.resumo())
+        self.assertEqual(janela.visualizacao.posicao_carro, vaga)
 
     def test_qml_camera_de_perseguicao_nao_usa_deslocamento_fixo(self) -> None:
         qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
@@ -398,6 +465,7 @@ class TestNovaInterface(unittest.TestCase):
             vertice.identificador: (vertice.x, 0.0, vertice.y)
             for vertice in janela.grafo.listar_vertices()
         }
+        self._vincular_carro_teste(janela, janela.projeto.posicoes["D"])
         for aresta in janela.grafo.listar_arestas():
             origem = aresta.origem.identificador
             destino = aresta.destino.identificador
@@ -424,6 +492,7 @@ class TestNovaInterface(unittest.TestCase):
             vertice.identificador: (vertice.x, 0.0, vertice.y)
             for vertice in janela.grafo.listar_vertices()
         }
+        self._vincular_carro_teste(janela, janela.projeto.posicoes["D"])
         for aresta in janela.grafo.listar_arestas():
             origem = aresta.origem.identificador
             destino = aresta.destino.identificador
@@ -788,13 +857,40 @@ class TestNovaInterface(unittest.TestCase):
         )
         self.assertGreaterEqual(janela.origem.findData("C1"), 0)
 
+        vaga_anterior = janela.projeto.estacionamento_inicial.posicao
+        novo_deposito = (-0.10, estacionamento.posicao[1], 0.065)
+        janela._ativar_definicao_deposito()
+        janela._clicar_superficie(
+            novo_deposito,
+            janela.configuracao_inicial.superficie_estacionamento,
+        )
+        vaga_redefinida = janela.projeto.estacionamento_inicial
+        self.assertEqual(janela.projeto.posicoes["D"], novo_deposito)
+        self.assertTrue(vaga_redefinida.validado)
+        self.assertEqual(vaga_redefinida.deposito, "D")
+        self.assertNotEqual(vaga_redefinida.posicao, vaga_anterior)
+        self.assertEqual(
+            janela.visualizacao.posicao_carro, vaga_redefinida.posicao
+        )
+
         caminho = Path(__file__).parents[1] / "delivery-route-5-entregas.json"
         conteudo_original = caminho.read_bytes()
         self.assertTrue(janela.abrir_projeto(caminho))
         self.assertEqual(len(janela.grafo.listar_clientes()), 5)
+        vaga_carregada = janela.projeto.estacionamento_inicial
+        self.assertIsNotNone(vaga_carregada)
+        self.assertTrue(vaga_carregada.validado)
+        self.assertEqual(
+            vaga_carregada.deposito,
+            janela.grafo.obter_deposito().identificador,
+        )
+        self.assertEqual(janela.visualizacao.posicao_carro, vaga_carregada.posicao)
         self.assertTrue(janela.novo_cenario(confirmar=False))
         self.assertEqual(len(janela.grafo.listar_vertices()), 1)
         self.assertEqual(janela.grafo.listar_clientes(), [])
+        vaga_nova = janela.projeto.estacionamento_inicial
+        self.assertTrue(vaga_nova.validado)
+        self.assertEqual(janela.visualizacao.posicao_carro, vaga_nova.posicao)
         self.assertEqual(caminho.read_bytes(), conteudo_original)
 
     def test_grafico_real_seleciona_e_arrasta_controle_sem_salvar(self) -> None:
@@ -954,7 +1050,7 @@ class TestNovaInterface(unittest.TestCase):
             self.assertTrue(janela.botao_navegar.isEnabled())
             self.assertTrue(janela.botao_adicionar_ponto.isEnabled())
             self.assertTrue(janela.botao_adicionar_cliente.isEnabled())
-            self.assertFalse(janela.botao_definir_deposito.isEnabled())
+            self.assertTrue(janela.botao_definir_deposito.isEnabled())
             self.assertTrue(janela.botao_criar_rua.isEnabled())
             recebidos = []
             visualizacao.ponto_selecionado.connect(lambda *dados: recebidos.append(dados))

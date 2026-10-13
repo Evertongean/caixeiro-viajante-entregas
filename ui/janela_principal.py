@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from math import hypot
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -421,7 +422,7 @@ class JanelaPrincipal(QMainWindow):
             lambda: self._ativar_adicao(TipoVertice.CLIENTE)
         )
         self.botao_definir_deposito.clicked.connect(
-            lambda: self._ativar_adicao(TipoVertice.DEPOSITO)
+            self._ativar_definicao_deposito
         )
         self.botao_criar_rua.clicked.connect(self._ativar_criacao_rua)
         self.botao_classificar.clicked.connect(self._ativar_classificacao)
@@ -638,6 +639,18 @@ class JanelaPrincipal(QMainWindow):
             return False, self._texto_ruas_pendentes(rota.arestas_pendentes)
         if not self.visualizacao.modelos_preparados:
             return False, "Aguarde o carregamento do carro e da cidade 3D."
+        deposito = self.grafo.obter_deposito()
+        if deposito is None:
+            return False, "Defina um depósito antes de iniciar a missão."
+        estacionamento = self.projeto.estacionamento_inicial
+        if (
+            estacionamento is None
+            or not estacionamento.validado
+            or estacionamento.deposito != deposito.identificador
+        ):
+            return False, "Aguarde a validação do carro junto ao depósito atual."
+        if rota.origem != deposito.identificador:
+            return False, "A missão deve partir do depósito atual."
         if self.visualizacao.mapa_trafegabilidade is not None:
             for segmento in rota.segmentos_espaciais:
                 validacao = self.visualizacao.validar_rua_automatica(segmento.pontos)
@@ -804,6 +817,7 @@ class JanelaPrincipal(QMainWindow):
         try:
             self._chave_visual_missao = None
             self.resumo_missao.setText("Missão reiniciada.")
+            self._aplicar_pose_estacionamento()
             self.animacao_missao.reiniciar()
         except ErroMissao:
             return
@@ -914,6 +928,7 @@ class JanelaPrincipal(QMainWindow):
         self._atualizar_controles_missao()
 
     def _missao_concluida(self, resumo: ResumoMissao) -> None:
+        self._aplicar_pose_estacionamento()
         self.resumo_missao.setText(self._texto_resumo_missao(resumo))
         self._atualizar_controles_missao()
 
@@ -1117,7 +1132,13 @@ class JanelaPrincipal(QMainWindow):
 
     def _aplicar_pose_estacionamento(self) -> bool:
         estacionamento = self.projeto.estacionamento_inicial
-        if estacionamento is None or not estacionamento.validado:
+        deposito = self.grafo.obter_deposito()
+        if (
+            estacionamento is None
+            or deposito is None
+            or not estacionamento.validado
+            or estacionamento.deposito != deposito.identificador
+        ):
             return False
         self.visualizacao.atualizar_carro(
             estacionamento.posicao,
@@ -1127,10 +1148,61 @@ class JanelaPrincipal(QMainWindow):
         )
         return True
 
-    def _resolver_pose_estacionamento(self) -> bool:
+    def _sincronizar_carro_com_deposito(
+        self, *, marcar_modificado: bool = True
+    ) -> bool:
+        """Mantém a pose física vinculada ao único depósito do projeto."""
         if not self.visualizacao.modelos_preparados:
             return False
+        deposito = self.grafo.obter_deposito()
+        if deposito is None:
+            if self.projeto.estacionamento_inicial is not None:
+                self.projeto.estacionamento_inicial = None
+                if marcar_modificado:
+                    self._definir_projeto_modificado(True)
+            return False
+        posicao_deposito = self.projeto.posicoes.get(deposito.identificador)
+        if posicao_deposito is None:
+            self._definir_instrucao(
+                "O depósito atual ainda não possui uma posição espacial."
+            )
+            return False
         anterior = self.projeto.estacionamento_inicial
+        if self.visualizacao.mapa_trafegabilidade is None:
+            reutilizavel = bool(
+                anterior is not None
+                and anterior.deposito == deposito.identificador
+                and hypot(
+                    anterior.posicao[0] - posicao_deposito[0],
+                    anterior.posicao[2] - posicao_deposito[2],
+                )
+                <= 0.25
+            )
+            estacionamento = (
+                anterior
+                if reutilizavel
+                else EstacionamentoVeiculo(
+                    deposito=deposito.identificador,
+                    posicao=posicao_deposito,
+                    orientacao_graus=0.0,
+                    superficie=None,
+                    validado=False,
+                )
+            )
+            self.projeto.estacionamento_inicial = estacionamento
+            self.visualizacao.atualizar_carro(
+                estacionamento.posicao,
+                estacionamento.orientacao_graus,
+                0.0,
+                imediato=True,
+            )
+            if marcar_modificado and estacionamento != anterior:
+                self._definir_projeto_modificado(True)
+            self._definir_instrucao(
+                "Carro vinculado provisoriamente ao depósito; o reconhecimento "
+                "automático é necessário para validar a vaga."
+            )
+            return estacionamento.validado
         try:
             estacionamento = self.visualizacao.posicionar_estacionamento(
                 self.projeto
@@ -1141,7 +1213,7 @@ class JanelaPrincipal(QMainWindow):
                 "Não foi possível validar o estacionamento inicial: " + str(erro)
             )
             return False
-        if anterior is None:
+        if marcar_modificado and estacionamento != anterior:
             self._definir_projeto_modificado(True)
         self._definir_instrucao(
             f"Carro estacionado sobre {estacionamento.superficie}, "
@@ -1149,29 +1221,9 @@ class JanelaPrincipal(QMainWindow):
         )
         return True
 
-    def _aplicar_estacionamento_salvo(self) -> bool:
-        """Aplica uma vaga persistida sem completar ou modificar o projeto."""
-        estacionamento = self.projeto.estacionamento_inicial
-        if estacionamento is None or not self.visualizacao.modelos_preparados:
-            return False
-        if self.visualizacao.mapa_trafegabilidade is None:
-            self.visualizacao.atualizar_carro(
-                estacionamento.posicao,
-                estacionamento.orientacao_graus,
-                0.0,
-                imediato=True,
-            )
-            return True
-        try:
-            self.visualizacao.posicionar_estacionamento(self.projeto)
-        except (OSError, TypeError, ValueError, RuntimeError) as erro:
-            LOGGER.warning("Estacionamento salvo indisponível: %s", erro)
-            return False
-        finally:
-            # A validação posiciona o carro, mas o documento aberto deve
-            # permanecer byte a byte semanticamente equivalente ao salvo.
-            self.projeto.estacionamento_inicial = estacionamento
-        return True
+    def _resolver_pose_estacionamento(self) -> bool:
+        """Nome legado para a regra central de sincronização carro–depósito."""
+        return self._sincronizar_carro_com_deposito()
 
     def _preparar_cenario_inicial(self) -> bool:
         """Revalida depósito e carro da configuração contra o GLB carregado."""
@@ -1188,17 +1240,8 @@ class JanelaPrincipal(QMainWindow):
             )
             return False
         if self.visualizacao.mapa_trafegabilidade is None:
-            estacionamento = self.projeto.estacionamento_inicial
-            if estacionamento is not None:
-                self.visualizacao.atualizar_carro(
-                    estacionamento.posicao,
-                    estacionamento.orientacao_graus,
-                    0.0,
-                    imediato=True,
-                )
-            self._definir_instrucao(
-                "Reconhecimento automático indisponível. Para cadastrar um ponto, "
-                "selecione visualmente a faixa de asfalto do modelo."
+            self._sincronizar_carro_com_deposito(
+                marcar_modificado=False
             )
             return False
         validacao = self.visualizacao.validar_posicao_trafegavel(posicao)
@@ -1215,7 +1258,9 @@ class JanelaPrincipal(QMainWindow):
                 "A cidade mudou desde a configuração inicial; a pose será "
                 "aceita somente após validação geométrica."
             )
-        if not self._resolver_pose_estacionamento():
+        if not self._sincronizar_carro_com_deposito(
+            marcar_modificado=False
+        ):
             self._definir_instrucao(
                 "Selecione o depósito e use Reposicionar para escolher outro "
                 "ponto de asfalto próximo a uma vaga válida."
@@ -1328,6 +1373,19 @@ class JanelaPrincipal(QMainWindow):
             f"adicionar {descricao}. Cancelar volta à navegação."
         )
         self._atualizar_botoes_operacao()
+
+    def _ativar_definicao_deposito(self) -> None:
+        """Cria o primeiro depósito ou reposiciona o único depósito ativo."""
+        deposito = self.grafo.obter_deposito()
+        if deposito is None:
+            self._ativar_adicao(TipoVertice.DEPOSITO)
+            return
+        self.editor.selecao = ("vertice", deposito.identificador)
+        self._reposicionar_selecao()
+        self._definir_instrucao(
+            "Clique no novo local de asfalto do depósito. O carro será "
+            "reposicionado automaticamente."
+        )
 
     def _ativar_criacao_rua(self) -> None:
         self.editor.iniciar_rua()
@@ -1473,9 +1531,7 @@ class JanelaPrincipal(QMainWindow):
         self.botao_navegar.setEnabled(True)
         self.botao_adicionar_ponto.setEnabled(True)
         self.botao_adicionar_cliente.setEnabled(True)
-        self.botao_definir_deposito.setEnabled(
-            self.grafo.obter_deposito() is None
-        )
+        self.botao_definir_deposito.setEnabled(True)
         self.botao_criar_rua.setEnabled(quantidade_vertices >= 2)
 
     def _revalidar_ruas_automaticamente(self) -> None:
@@ -1846,26 +1902,24 @@ class JanelaPrincipal(QMainWindow):
             identificador = self.editor.vertice_reposicionado
             if identificador is None:
                 return
+            era_deposito = (
+                self.grafo.obter_vertice(identificador).tipo
+                is TipoVertice.DEPOSITO
+            )
             try:
                 self.editor.reposicionar_vertice(identificador, posicao)
             except (TypeError, ValueError, KeyError) as erro:
                 self._mostrar_erro(str(erro))
                 return
-            if identificador == "D" and self._cenario_inicial_limpo:
-                self.projeto.estacionamento_inicial = EstacionamentoVeiculo(
-                    deposito="D",
-                    posicao=posicao,
-                    orientacao_graus=(
-                        self.configuracao_inicial.orientacao_estacionamento
-                    ),
-                    superficie=referencia,
-                    validado=False,
-                )
-                self._resolver_pose_estacionamento()
             self._invalidar_rota_por_edicao()
+            if era_deposito:
+                self._sincronizar_carro_com_deposito()
             self._sincronizar_cena()
             self._modo_navegar()
-            self._definir_instrucao(f"Ponto {identificador} reposicionado.")
+            self._definir_instrucao(
+                f"Ponto {identificador} reposicionado"
+                + (" e carro vinculado ao novo depósito." if era_deposito else ".")
+            )
             return
 
         if modo is ModoEditor.ADICIONAR_PONTO:
@@ -1961,6 +2015,8 @@ class JanelaPrincipal(QMainWindow):
         finally:
             self.visualizacao.mostrar_marcador_temporario(None)
         self._invalidar_rota_por_edicao()
+        if tipo_escolhido is TipoVertice.DEPOSITO:
+            self._sincronizar_carro_com_deposito()
         self._sincronizar_cena()
         self._definir_instrucao(
             f"Ponto {identificador} criado e associado ao grafo oficial."
@@ -2188,11 +2244,18 @@ class JanelaPrincipal(QMainWindow):
                 return
             _, nome, tipo = dialogo.dados()
             try:
-                self.editor.editar_vertice(identificador, nome=nome, tipo=tipo)
+                atualizado = self.editor.editar_vertice(
+                    identificador, nome=nome, tipo=tipo
+                )
             except (TypeError, ValueError, KeyError) as erro:
                 self._mostrar_erro(str(erro))
                 return
             self._invalidar_rota_por_edicao()
+            if (
+                vertice.tipo is TipoVertice.DEPOSITO
+                or atualizado.tipo is TipoVertice.DEPOSITO
+            ):
+                self._sincronizar_carro_com_deposito()
             self._sincronizar_cena()
             self._definir_instrucao(f"Ponto {identificador} atualizado.")
             return
@@ -2244,6 +2307,11 @@ class JanelaPrincipal(QMainWindow):
         )
         if resposta != QMessageBox.StandardButton.Yes:
             return
+        removendo_deposito = bool(
+            selecao[0] == "vertice"
+            and self.grafo.obter_vertice(selecao[1]).tipo
+            is TipoVertice.DEPOSITO
+        )
         try:
             if selecao[0] == "vertice":
                 self.editor.remover_vertice(selecao[1])
@@ -2254,6 +2322,8 @@ class JanelaPrincipal(QMainWindow):
             return
         self.editor.selecao = None
         self._invalidar_rota_por_edicao()
+        if removendo_deposito:
+            self._sincronizar_carro_com_deposito()
         self._sincronizar_cena()
         self._atualizar_botoes_selecao()
         self._definir_instrucao("Item excluído com sucesso.")
@@ -2344,15 +2414,15 @@ class JanelaPrincipal(QMainWindow):
         self._cenario_inicial_limpo = False
         self._assinatura_campos_grafo = None
         self.caminho_projeto = Path(caminho)
+        self._definir_projeto_modificado(False)
         self.limpar_rota(status="Projeto carregado. Calcule uma nova rota.")
         self._atualizando_campos_rota = True
         self.lista_clientes.clear()
         self._atualizando_campos_rota = False
         self._inicializar_posicoes_legadas()
         self._sincronizar_cena()
-        self._aplicar_estacionamento_salvo()
+        self._sincronizar_carro_com_deposito()
         self._modo_navegar()
-        self._definir_projeto_modificado(False)
         self._definir_instrucao(f"Projeto {self.caminho_projeto.name} carregado.")
         return True
 
@@ -2463,7 +2533,7 @@ class JanelaPrincipal(QMainWindow):
                 if self._cenario_inicial_limpo:
                     cenario_preparado = self._preparar_cenario_inicial()
                 else:
-                    self._aplicar_estacionamento_salvo()
+                    self._sincronizar_carro_com_deposito()
                 self._modo_navegar()
                 if self.rota_calculada is None:
                     status = (

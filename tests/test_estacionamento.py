@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from math import hypot
 from pathlib import Path
 
 from models.estacionamento import (
@@ -11,8 +12,9 @@ from models.estacionamento import (
     resolver_estacionamento,
     validar_estacionamento,
 )
+from models.grafo import Grafo, TipoVertice, Vertice
 from models.missao import ControladorMissao, EstadoMissao
-from models.projeto_cidade import carregar_projeto_cidade
+from models.projeto_cidade import ProjetoCidade, carregar_projeto_cidade
 from models.rota import calcular_dijkstra, calcular_tsp
 from ui.assets_3d import (
     ESCALA_CARRO_PADRAO,
@@ -90,6 +92,35 @@ class TestEstacionamentoCidadeCompleta(unittest.TestCase):
         )
         self.assertTrue(estacionamento.validado)
         self.assertEqual(estacionamento.deposito, "D")
+
+    def test_resolve_vaga_pelo_mapa_sem_arestas_saindo_do_deposito(self) -> None:
+        grafo = Grafo()
+        grafo.adicionar_vertice(
+            Vertice("D", "Novo depósito", TipoVertice.DEPOSITO, -0.30, 0.065)
+        )
+        grafo.definir_deposito("D")
+        projeto = ProjetoCidade(
+            grafo=grafo,
+            posicoes={"D": (-0.30, -0.006227047208837454, 0.065)},
+        )
+        estacionamento = resolver_estacionamento(
+            projeto, self.mapa, self.dimensoes
+        )
+        self.assertTrue(estacionamento.validado)
+        self.assertEqual(estacionamento.deposito, "D")
+        self.assertLessEqual(
+            hypot(
+                estacionamento.posicao[0] - projeto.posicoes["D"][0],
+                estacionamento.posicao[2] - projeto.posicoes["D"][2],
+            ),
+            0.25,
+        )
+        self.assertEqual(abs(estacionamento.orientacao_graus), 90.0)
+        self.assertTrue(
+            validar_estacionamento(
+                estacionamento, self.mapa, self.dimensoes
+            ).valido
+        )
 
     def test_dijkstra_e_tsp_sao_identicos_no_original_e_corrigido(self) -> None:
         original = carregar_projeto_cidade(ORIGINAL)

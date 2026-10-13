@@ -168,13 +168,19 @@ class EditorCidade3D:
         tipo: TipoVertice,
     ) -> Vertice:
         atual = self.projeto.grafo.obter_vertice(identificador)
-        return self.projeto.grafo.atualizar_vertice(
+        atualizado = self.projeto.grafo.atualizar_vertice(
             identificador,
             nome=nome,
             tipo=tipo,
             x=atual.x,
             y=atual.y,
         )
+        if atual.tipo is not atualizado.tipo and (
+            atual.tipo is TipoVertice.DEPOSITO
+            or atualizado.tipo is TipoVertice.DEPOSITO
+        ):
+            self.projeto.estacionamento_inicial = None
+        return atualizado
 
     def reposicionar_vertice(
         self, identificador: str, posicao: Sequence[float]
@@ -190,10 +196,14 @@ class EditorCidade3D:
             y=y,
         )
         self.projeto.posicoes[identificador] = posicao3
+        if atualizado.tipo is TipoVertice.DEPOSITO:
+            self.projeto.estacionamento_inicial = None
         return atualizado
 
     def remover_vertice(self, identificador: str) -> Vertice:
         removido = self.projeto.grafo.remover_vertice(identificador)
+        if removido.tipo is TipoVertice.DEPOSITO:
+            self.projeto.estacionamento_inicial = None
         self.projeto.posicoes.pop(identificador, None)
         for chave in list(self.projeto.ruas):
             if identificador in chave:

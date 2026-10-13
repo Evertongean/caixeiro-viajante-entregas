@@ -11,6 +11,7 @@ from models.grafo import Grafo, TipoVertice
 from models.missao import ControladorMissao
 from models.projeto_cidade import (
     ClassificacaoSuperficie,
+    EstacionamentoVeiculo,
     GeometriaRua,
     ProjetoCidade,
 )
@@ -142,6 +143,29 @@ class TestEditorCidade3D(unittest.TestCase):
         cliente = self.projeto.grafo.obter_vertice("C1")
         self.assertEqual((cliente.nome, cliente.x, cliente.y), ("Mercado", 8, 9))
         self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 5)
+
+    def test_mudar_deposito_invalida_estacionamento_antigo(self) -> None:
+        self._criar_rede_minima()
+        self.projeto.estacionamento_inicial = EstacionamentoVeiculo(
+            deposito="D",
+            posicao=(1.0, 0.2, 2.0),
+            orientacao_graus=90.0,
+            superficie="rua|asfalto",
+            validado=True,
+        )
+        self.editor.reposicionar_vertice("D", (4.0, 0.2, 5.0))
+        self.assertIsNone(self.projeto.estacionamento_inicial)
+
+        self.projeto.estacionamento_inicial = EstacionamentoVeiculo(
+            deposito="D",
+            posicao=(4.0, 0.2, 5.0),
+            orientacao_graus=90.0,
+            validado=True,
+        )
+        self.editor.editar_vertice(
+            "D", nome="Antigo depósito", tipo=TipoVertice.CRUZAMENTO
+        )
+        self.assertIsNone(self.projeto.estacionamento_inicial)
 
     def test_exclusao_de_rua_e_vertice_mantem_geometria_consistente(self) -> None:
         self._criar_rede_minima()

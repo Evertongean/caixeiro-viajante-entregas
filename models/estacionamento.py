@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import atan2, cos, degrees, hypot, radians, sin
+from math import atan2, cos, degrees, hypot, pi, radians, sin
 from typing import Protocol
 
 from models.projeto_cidade import (
@@ -146,6 +146,80 @@ def _direcoes_de_saida(
     return tuple(direcoes)
 
 
+def _orientacoes_candidatas(
+    projeto: ProjetoCidade, deposito: str
+) -> tuple[float, ...]:
+    orientacoes: list[float] = []
+    for direcao_x, direcao_z in _direcoes_de_saida(projeto, deposito):
+        orientacoes.append(degrees(atan2(direcao_x, direcao_z)))
+    # O eixo do veículo é simétrico para a validação da ocupação. Passos
+    # de 15° cobrem também vias diagonais sem atrelar a busca ao grafo lógico.
+    orientacoes.extend(float(angulo) for angulo in range(-180, 0, 15))
+    unicas: list[float] = []
+    for orientacao in orientacoes:
+        normalizada = ((orientacao + 180.0) % 180.0) - 180.0
+        if all(abs(normalizada - existente) > 1e-6 for existente in unicas):
+            unicas.append(normalizada)
+    return tuple(unicas)
+
+
+def _alcance_longitudinal(
+    mapa: MapaSuperficies,
+    posicao: Ponto3D,
+    orientacao_graus: float,
+    *,
+    limite: float = 0.20,
+    passo: float = 0.01,
+) -> float:
+    """Mede o eixo contínuo de rua para preferir o alinhamento da via."""
+    angulo = radians(orientacao_graus)
+    frente = (sin(angulo), cos(angulo))
+    alcance = 0.0
+    for sentido in (-1.0, 1.0):
+        distancia = passo
+        while distancia <= limite + 1e-9:
+            amostra = mapa.amostrar(
+                posicao[0] + frente[0] * distancia * sentido,
+                posicao[2] + frente[1] * distancia * sentido,
+            )
+            if (
+                amostra is None
+                or amostra.classificacao is not ClassificacaoSuperficie.RUA
+            ):
+                break
+            alcance += passo
+            distancia += passo
+    return alcance
+
+
+def _posicoes_proximas(
+    origem: Ponto3D,
+    distancia_maxima: float,
+    *,
+    passo: float = 0.01,
+) -> tuple[tuple[float, Ponto3D], ...]:
+    """Gera anéis determinísticos ao redor do depósito, do mais perto ao longe."""
+    resultado = [(0.0, origem)]
+    quantidade_raios = max(1, int(distancia_maxima / passo))
+    for indice in range(1, quantidade_raios + 1):
+        raio = min(indice * passo, distancia_maxima)
+        # Vinte e quatro direções mantêm o erro lateral abaixo da resolução
+        # do mapa mesmo no limite da busca.
+        for setor in range(24):
+            angulo = 2.0 * pi * setor / 24.0
+            resultado.append(
+                (
+                    raio,
+                    (
+                        origem[0] + cos(angulo) * raio,
+                        origem[1],
+                        origem[2] + sin(angulo) * raio,
+                    ),
+                )
+            )
+    return tuple(resultado)
+
+
 def resolver_estacionamento(
     projeto: ProjetoCidade,
     mapa: MapaSuperficies,
@@ -176,33 +250,59 @@ def resolver_estacionamento(
                 )
 
     origem = projeto.posicoes[deposito.identificador]
-    direcoes = _direcoes_de_saida(projeto, deposito.identificador)
-    if not direcoes:
-        raise ValueError("O depósito não possui rua espacial calibrada para estacionar.")
-    # Primeiro tenta o ponto lógico do depósito. Os deslocamentos seguintes
-    # permanecem sobre a própria polilinha e servem para depósitos em esquinas.
-    deslocamentos = (0.0, 0.025, -0.025, 0.05, -0.05, 0.075, -0.075)
-    for direcao_x, direcao_z in direcoes:
-        orientacao = degrees(atan2(direcao_x, direcao_z))
-        for deslocamento in deslocamentos:
+    orientacoes = _orientacoes_candidatas(projeto, deposito.identificador)
+    distancia_atual: float | None = None
+    candidatos_validos: list[
+        tuple[float, float, ResultadoValidacaoEstacionamento]
+    ] = []
+    for distancia, posicao in _posicoes_proximas(
+        origem, distancia_maxima_deposito
+    ):
+        if distancia_atual is not None and distancia > distancia_atual + 1e-9:
+            if candidatos_validos:
+                break
+            candidatos_validos.clear()
+        distancia_atual = distancia
+        amostra = mapa.amostrar(posicao[0], posicao[2])
+        if (
+            amostra is None
+            or amostra.classificacao is not ClassificacaoSuperficie.RUA
+        ):
+            continue
+        posicao_pavimento = (posicao[0], amostra.altura, posicao[2])
+        for orientacao in orientacoes:
             candidato = EstacionamentoVeiculo(
                 deposito=deposito.identificador,
-                posicao=(
-                    origem[0] + direcao_x * deslocamento,
-                    origem[1],
-                    origem[2] + direcao_z * deslocamento,
-                ),
+                posicao=posicao_pavimento,
                 orientacao_graus=orientacao,
             )
             validacao = validar_estacionamento(candidato, mapa, dimensoes)
             if validacao.valido:
-                return EstacionamentoVeiculo(
-                    deposito=deposito.identificador,
-                    posicao=validacao.posicao_pavimento,
-                    orientacao_graus=orientacao,
-                    superficie=validacao.superficie,
-                    validado=True,
+                candidatos_validos.append(
+                    (
+                        _alcance_longitudinal(
+                            mapa, validacao.posicao_pavimento, orientacao
+                        ),
+                        orientacao,
+                        validacao,
+                    )
                 )
+    if candidatos_validos:
+        _, orientacao, validacao = max(
+            candidatos_validos,
+            key=lambda item: (
+                item[0],
+                -abs(item[1] - round(item[1] / 90.0) * 90.0),
+                -abs(item[1]),
+            ),
+        )
+        return EstacionamentoVeiculo(
+            deposito=deposito.identificador,
+            posicao=validacao.posicao_pavimento,
+            orientacao_graus=orientacao,
+            superficie=validacao.superficie,
+            validado=True,
+        )
     raise ValueError(
         "Não foi encontrada uma área de asfalto com espaço para toda a carroceria."
     )
