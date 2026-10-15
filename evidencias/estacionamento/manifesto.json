@@ -1,0 +1,44 @@
+{
+  "cenario": "delivery-route-cidade-completa-corrigida.json",
+  "backend": "OpenGL",
+  "renderizacao_real": true,
+  "estacionamento": {
+    "deposito": "D",
+    "posicao": [
+      -0.55,
+      -0.006227047208837121,
+      0.065
+    ],
+    "orientacao_graus": -90.0,
+    "superficie": "wh_plane_0|plane",
+    "validado": true
+  },
+  "inicio_missao": {
+    "posicao_inicial": [
+      -0.55,
+      -0.006227047208837121,
+      0.065
+    ],
+    "posicao_apos_0_2s": [
+      -0.514,
+      -0.006227047208837454,
+      0.065
+    ],
+    "deslocamento_continuo": 0.03600000000000003
+  },
+  "reinicio": {
+    "posicao": [
+      -0.55,
+      -0.006227047208837121,
+      0.065
+    ],
+    "orientacao_graus": -90.0,
+    "retornou_a_vaga": true
+  },
+  "evidencias": [
+    "01-visao-aerea.png",
+    "02-visao-lateral.png",
+    "03-camera-atras.png",
+    "04-apos-reinicio.png"
+  ]
+}

@@ -12,16 +12,25 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtCore import QPoint, QTimer, Qt
     from PySide6.QtQuickWidgets import QQuickWidget
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
-    from models.grafo import TipoVertice
+    from models.grafo import Grafo, TipoVertice, Vertice, criar_cenario_exemplo
+    from models.missao import EstadoMissao, FaseMovimento, TipoEventoMissao
     from ui.assets_3d import ConversorBalsam
     from ui.camera_orbital import ModoCamera
     from ui.janela_principal import JanelaPrincipal
-    from models.projeto_cidade import ClassificacaoSuperficie, GeometriaRua
+    from models.projeto_cidade import (
+        ClassificacaoSuperficie,
+        EstacionamentoVeiculo,
+        GeometriaRua,
+        ProjetoCidade,
+        salvar_projeto_cidade,
+    )
     from ui.dialogos_editor import DialogoSuperficie, DialogoVertice
+    from ui.editor_cidade import ModoEditor
 
     PYSIDE6_DISPONIVEL = True
 except ModuleNotFoundError:
@@ -35,7 +44,12 @@ class TestNovaInterface(unittest.TestCase):
         cls.aplicacao = QApplication.instance() or QApplication([])
 
     def criar_janela(self) -> JanelaPrincipal:
-        janela = JanelaPrincipal(auto_inicializar_3d=False)
+        # A maioria destes testes exercita a rede didática antiga de forma
+        # explícita; a GUI real não herda mais esse cenário.
+        janela = JanelaPrincipal(
+            auto_inicializar_3d=False,
+            projeto_inicial=ProjetoCidade(grafo=criar_cenario_exemplo()),
+        )
         janela.show()
         self.aplicacao.processEvents()
         self.addCleanup(self._fechar, janela)
@@ -45,6 +59,163 @@ class TestNovaInterface(unittest.TestCase):
         janela.close()
         janela.deleteLater()
         self.aplicacao.processEvents()
+
+    @staticmethod
+    def _vincular_carro_teste(
+        janela: JanelaPrincipal,
+        posicao: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    ) -> None:
+        deposito = janela.grafo.obter_deposito()
+        janela.projeto.estacionamento_inicial = EstacionamentoVeiculo(
+            deposito=deposito.identificador,
+            posicao=posicao,
+            orientacao_graus=90.0,
+            superficie="rua|teste",
+            validado=True,
+        )
+
+    def criar_janela_limpa(self) -> JanelaPrincipal:
+        janela = JanelaPrincipal(auto_inicializar_3d=False)
+        janela.show()
+        self.aplicacao.processEvents()
+        self.addCleanup(self._fechar, janela)
+        return janela
+
+    def test_inicio_real_tem_apenas_deposito_e_estado_neutro(self) -> None:
+        janela = self.criar_janela_limpa()
+        vertices = janela.grafo.listar_vertices()
+        self.assertEqual(
+            [(item.identificador, item.nome, item.tipo) for item in vertices],
+            [("D", "Depósito Central", TipoVertice.DEPOSITO)],
+        )
+        self.assertEqual(janela.grafo.listar_clientes(), [])
+        self.assertEqual(janela.grafo.listar_arestas(), [])
+        self.assertEqual([item["id"] for item in janela.editor.marcadores_qml()], ["D"])
+        self.assertEqual(janela.origem.count(), 1)
+        self.assertEqual(janela.destino.count(), 1)
+        self.assertEqual(janela.lista_clientes.count(), 0)
+        self.assertFalse(janela.botao_calcular.isEnabled())
+        self.assertIn("dois pontos", janela.botao_calcular.toolTip())
+        self.assertEqual(janela.cartao_distancia.valor.text(), "—")
+        self.assertEqual(
+            janela.cartao_percurso.valor.text(), "Nenhuma rota calculada"
+        )
+        self.assertEqual(janela.cartao_clientes.valor.text(), "0 / 0")
+        self.assertIsNone(janela.rota_calculada)
+        self.assertIsNone(janela.controlador_missao)
+        self.assertIsNone(janela.caminho_projeto)
+        self.assertFalse(janela.projeto_modificado)
+
+    def test_controles_do_cenario_limpo_ficam_coerentes_apos_cena_pronta(self) -> None:
+        janela = self.criar_janela_limpa()
+        janela.visualizacao.modelos_preparados = True
+        janela._atualizar_estado_cena("Modelos preparados", True)
+        self.assertTrue(janela.botao_navegar.isEnabled())
+        self.assertTrue(janela.botao_adicionar_ponto.isEnabled())
+        self.assertTrue(janela.botao_adicionar_cliente.isEnabled())
+        self.assertTrue(janela.botao_definir_deposito.isEnabled())
+        self.assertFalse(janela.botao_criar_rua.isEnabled())
+        self.assertEqual(
+            janela.cartao_status.valor.text(),
+            "Cidade pronta. Adicione clientes para começar.",
+        )
+
+    def test_adiciona_primeiro_e_multiplos_clientes_no_cenario_limpo(self) -> None:
+        janela = self.criar_janela_limpa()
+        janela._editor_inicializado = True
+        respostas = iter(
+            (
+                ("C1", "Cliente Um", TipoVertice.CLIENTE),
+                ("C2", "Cliente Dois", TipoVertice.CLIENTE),
+            )
+        )
+        with patch("ui.janela_principal.DialogoVertice") as dialogo:
+            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialogo.return_value.dados.side_effect = lambda: next(respostas)
+            self.assertEqual(
+                janela._criar_vertice_no_ponto((-0.35, -0.006, 0.065), TipoVertice.CLIENTE),
+                "C1",
+            )
+            self.assertEqual(
+                janela._criar_vertice_no_ponto((-0.20, -0.006, 0.065), TipoVertice.CLIENTE),
+                "C2",
+            )
+        self.assertEqual(
+            [cliente.identificador for cliente in janela.grafo.listar_clientes()],
+            ["C1", "C2"],
+        )
+        self.assertEqual(janela.lista_clientes.count(), 2)
+        self.assertEqual(janela.origem.count(), 3)
+        self.assertTrue(janela.botao_criar_rua.isEnabled())
+        self.assertTrue(janela.botao_definir_deposito.isEnabled())
+
+    def test_definir_deposito_existente_ativa_reposicionamento(self) -> None:
+        janela = self.criar_janela_limpa()
+        janela._editor_inicializado = True
+        janela._atualizar_disponibilidade_editor()
+        janela.botao_definir_deposito.click()
+        self.assertIs(janela.editor.modo, ModoEditor.REPOSICIONAR_VERTICE)
+        self.assertEqual(janela.editor.vertice_reposicionado, "D")
+        self.assertIn("carro será reposicionado", janela.instrucao_editor.text())
+
+    def test_abre_cinco_clientes_exatamente_e_novo_nao_altera_arquivo(self) -> None:
+        janela = self.criar_janela_limpa()
+        grafo = Grafo()
+        grafo.adicionar_vertice(
+            Vertice("D", "Depósito salvo", TipoVertice.DEPOSITO, 0, 0)
+        )
+        grafo.definir_deposito("D")
+        posicoes = {"D": (0.0, 0.0, 0.0)}
+        for indice in range(1, 6):
+            identificador = f"C{indice}"
+            grafo.adicionar_vertice(
+                Vertice(
+                    identificador,
+                    f"Cliente {indice}",
+                    TipoVertice.CLIENTE,
+                    float(indice),
+                    0.0,
+                )
+            )
+            posicoes[identificador] = (float(indice), 0.0, 0.0)
+        projeto = ProjetoCidade(grafo=grafo, posicoes=posicoes)
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = Path(pasta) / "cinco-clientes.json"
+            salvar_projeto_cidade(projeto, caminho)
+            conteudo_original = caminho.read_bytes()
+            self.assertTrue(janela.abrir_projeto(caminho))
+            self.assertEqual(len(janela.grafo.listar_clientes()), 5)
+            self.assertEqual(janela.projeto.posicoes, posicoes)
+            self.assertFalse(janela.projeto_modificado)
+            janela.visualizacao.modelos_preparados = True
+            janela._atualizar_estado_cena("Modelos preparados", True)
+            self.assertEqual(len(janela.grafo.listar_clientes()), 5)
+            self.assertEqual(janela.projeto.posicoes, posicoes)
+            estacionamento = janela.projeto.estacionamento_inicial
+            self.assertIsNotNone(estacionamento)
+            self.assertEqual(estacionamento.deposito, "D")
+            self.assertEqual(estacionamento.posicao, posicoes["D"])
+            self.assertFalse(estacionamento.validado)
+            self.assertTrue(janela.projeto_modificado)
+            self.assertTrue(janela.novo_cenario(confirmar=False))
+            self.assertEqual(caminho.read_bytes(), conteudo_original)
+        self.assertEqual(
+            [vertice.identificador for vertice in janela.grafo.listar_vertices()],
+            ["D"],
+        )
+        self.assertEqual(janela.grafo.listar_clientes(), [])
+        self.assertIsNone(janela.caminho_projeto)
+
+    def test_nova_janela_nao_restaura_ultimo_projeto(self) -> None:
+        primeira = self.criar_janela_limpa()
+        primeira.editor.criar_vertice(
+            "C1", "Cliente temporário", TipoVertice.CLIENTE, (-0.3, 0.0, 0.0)
+        )
+        segunda = self.criar_janela_limpa()
+        self.assertEqual(
+            [vertice.identificador for vertice in segunda.grafo.listar_vertices()],
+            ["D"],
+        )
 
     def test_inicializa_janela_unica_com_tres_regioes(self) -> None:
         janela = self.criar_janela()
@@ -68,6 +239,26 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIn("visualizacao.pick(x, y)", qml)
         self.assertIn("resultado.scenePosition", qml)
         self.assertIn("resultado.objectHit", qml)
+        self.assertIn("visualizacao.pickAll(x, y)", qml)
+        self.assertIn('diagnosticoUltimoPick = "fora_viewport"', qml)
+        self.assertIn('diagnosticoUltimoPick = "sem_geometria"', qml)
+
+    def test_qml_seleciona_ruas_com_tolerancia_e_desambigua(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("candidatosRua(x, y, segmentosRuas, 10)", qml)
+        self.assertIn("indiceCandidato = (indiceCandidato + 1)", qml)
+        self.assertIn('"ruas_ambiguas:"', qml)
+
+    def test_qml_controles_arrastaveis_nao_movem_extremos(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('objectName: "controle-rua:"', qml)
+        self.assertIn("pickable: modelData.movel", qml)
+        self.assertIn("executarPickArraste", qml)
+        self.assertIn('raiz.modoInteracao === "editar_tracado"', qml)
 
     def test_divisao_inicial_aproxima_setenta_e_cinco_por_cento(self) -> None:
         janela = self.criar_janela()
@@ -122,6 +313,7 @@ class TestNovaInterface(unittest.TestCase):
             "B": (3.0, 0.0, 0.0),
             "C": (1.0, 0.0, 2.0),
         }
+        self._vincular_carro_teste(janela, janela.projeto.posicoes["D"])
         for origem, destino in (("D", "X"), ("X", "A"), ("A", "B")):
             janela.projeto.ruas[janela.projeto.chave_aresta(origem, destino)] = (
                 GeometriaRua(origem, destino, [], True)
@@ -155,6 +347,48 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIsNone(janela.animacao_missao)
         self.assertIsNone(janela.controlador_missao)
 
+    def test_reinicio_volta_a_vaga_e_dijkstra_conclui_no_destino(self) -> None:
+        janela = self.criar_janela()
+        janela.visualizacao.modelos_preparados = True
+        janela.projeto.posicoes = {
+            "D": (0.0, 0.0, 0.0),
+            "X": (1.0, 0.0, 0.0),
+            "A": (2.0, 0.0, 0.0),
+            "B": (3.0, 0.0, 0.0),
+            "C": (1.0, 0.0, 2.0),
+        }
+        vaga = (-0.10, 0.0, 0.0)
+        self._vincular_carro_teste(janela, vaga)
+        for origem, destino in (("D", "X"), ("X", "A"), ("A", "B")):
+            janela.projeto.ruas[janela.projeto.chave_aresta(origem, destino)] = (
+                GeometriaRua(origem, destino, [], True)
+            )
+        janela.origem.setCurrentIndex(janela.origem.findData("D"))
+        janela.destino.setCurrentIndex(janela.destino.findData("B"))
+        janela.botao_calcular.click()
+        janela.botao_iniciar.click()
+        janela.animacao_missao.timer.stop()
+
+        quadro_movido = janela.controlador_missao.avancar(1.0)
+        janela._atualizar_quadro_missao(quadro_movido, 1.0)
+        self.assertNotEqual(janela.visualizacao.posicao_carro, vaga)
+        self.assertIn("unid./s", janela.indicador_velocidade.text())
+        janela._reiniciar_missao()
+        janela.animacao_missao.timer.stop()
+        self.assertEqual(janela.controlador_missao.quadro().posicao, vaga)
+        self.assertEqual(janela.visualizacao.posicao_carro, vaga)
+
+        janela.controlador_missao.velocidade_base = 10.0
+        concluido = janela.controlador_missao.avancar(10.0)
+        self.assertEqual(concluido.estado.value, "concluida")
+        janela._atualizar_quadro_missao(concluido, 10.0)
+        self.assertNotEqual(janela.visualizacao.posicao_carro, vaga)
+        janela._missao_concluida(janela.controlador_missao.resumo())
+        self.assertEqual(janela.visualizacao.posicao_carro, (3.0, 0.0, 0.0))
+        self.assertIn("Missão concluída", janela.indicador_velocidade.text())
+        janela._encerrar_missao()
+        self.assertEqual(janela.visualizacao.posicao_carro, vaga)
+
     def test_qml_camera_de_perseguicao_nao_usa_deslocamento_fixo(self) -> None:
         qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
             encoding="utf-8"
@@ -162,6 +396,25 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIn("cameraSeguimentoPosicao", qml)
         self.assertIn("cameraSeguimentoAlvo", qml)
         self.assertNotIn("raiz.posicaoCarro.z + 0.42", qml)
+
+    def test_ajuste_da_camera_preserva_estado_do_freio(self) -> None:
+        janela = self.criar_janela()
+        visualizacao = janela.visualizacao
+        visualizacao.atualizar_carro((0, 0, 0), 0, freando=True)
+        visualizacao.camera_atras_do_carro()
+        self.assertTrue(visualizacao.freando_carro)
+        visualizacao.configurar_camera_seguidora(0.30, 0.16)
+        self.assertTrue(visualizacao.freando_carro)
+
+    def test_qml_luzes_de_freio_usam_estado_e_geometria_traseira(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("property bool freandoCarro: false", qml)
+        self.assertIn("Behavior on intensidadeLuzesFreio", qml)
+        self.assertEqual(qml.count('objectName: "luz-freio-traseira"'), 1)
+        self.assertIn("model: raiz.lanternasFreio", qml)
+        self.assertIn("emissiveFactor: Qt.vector3d(", qml)
 
     def test_seletor_prepara_campos_correspondentes_ao_algoritmo(self) -> None:
         janela = self.criar_janela()
@@ -178,7 +431,7 @@ class TestNovaInterface(unittest.TestCase):
         self.assertEqual(
             janela.cartao_percurso.valor.text(), "Nenhuma rota calculada"
         )
-        self.assertEqual(janela.cartao_clientes.valor.text(), "0")
+        self.assertEqual(janela.cartao_clientes.valor.text(), "0 / 0")
 
     def test_selecao_individual_e_selecionar_todos_clientes(self) -> None:
         janela = self.criar_janela()
@@ -236,6 +489,7 @@ class TestNovaInterface(unittest.TestCase):
             vertice.identificador: (vertice.x, 0.0, vertice.y)
             for vertice in janela.grafo.listar_vertices()
         }
+        self._vincular_carro_teste(janela, janela.projeto.posicoes["D"])
         for aresta in janela.grafo.listar_arestas():
             origem = aresta.origem.identificador
             destino = aresta.destino.identificador
@@ -262,6 +516,7 @@ class TestNovaInterface(unittest.TestCase):
             vertice.identificador: (vertice.x, 0.0, vertice.y)
             for vertice in janela.grafo.listar_vertices()
         }
+        self._vincular_carro_teste(janela, janela.projeto.posicoes["D"])
         for aresta in janela.grafo.listar_arestas():
             origem = aresta.origem.identificador
             destino = aresta.destino.identificador
@@ -283,7 +538,7 @@ class TestNovaInterface(unittest.TestCase):
         janela = self.criar_janela()
         janela.seletor_algoritmo.setCurrentIndex(1)
         janela.selecionar_todos_clientes.setChecked(False)
-        janela.botao_calcular.click()
+        janela._calcular_rota()
         self.assertIsNone(janela.rota_calculada)
         self.assertIn("pelo menos um cliente", janela.cartao_status.valor.text())
         self.assertIn("pelo menos um cliente", janela.resultado_calibracao.text())
@@ -316,6 +571,57 @@ class TestNovaInterface(unittest.TestCase):
             janela._editar_selecao()
         self.assertIsNone(janela.rota_calculada)
         self.assertIn("recalcular", janela.cartao_status.valor.text())
+
+    def test_editar_arrastar_cancelar_confirmar_e_reabrir_rua(self) -> None:
+        janela = self.criar_janela()
+        janela.projeto.posicoes = {
+            vertice.identificador: (vertice.x, 0.0, vertice.y)
+            for vertice in janela.grafo.listar_vertices()
+        }
+        inicio = janela.projeto.posicoes["D"]
+        fim = janela.projeto.posicoes["X"]
+        meio = tuple((a + b) / 2 for a, b in zip(inicio, fim))
+        chave = janela.projeto.chave_aresta("D", "X")
+        janela.projeto.ruas[chave] = GeometriaRua("D", "X", [meio], True)
+        original = list(janela.projeto.ruas[chave].pontos_intermediarios)
+        janela.botao_calcular.click()
+        self.assertIsNotNone(janela.rota_calculada)
+
+        janela.editor.selecao = ("aresta", *chave)
+        janela._editar_selecao()
+        self.assertIs(janela.editor.modo, ModoEditor.EDITAR_TRACADO)
+        janela.editor.iniciar_arraste_ponto(0)
+        alterado = (meio[0] + 0.1, meio[1], meio[2] + 0.1)
+        janela.editor.atualizar_arraste_ponto(alterado)
+        janela.editor.finalizar_arraste_ponto(valida=True)
+        janela._sincronizar_cena()
+        self.assertIn("não salvas", janela.detalhes_rua.text())
+        janela._cancelar_operacao()
+        self.assertEqual(janela.projeto.ruas[chave].pontos_intermediarios, original)
+
+        janela._editar_selecao()
+        janela.editor.iniciar_arraste_ponto(0)
+        janela.editor.atualizar_arraste_ponto(alterado)
+        janela.editor.finalizar_arraste_ponto(valida=True)
+        self.assertIsNotNone(janela.rota_calculada)
+        with patch("ui.janela_principal.DialogoRua") as dialogo:
+            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialogo.return_value.dados.return_value = (
+                janela.grafo.obter_distancia("D", "X"),
+                janela.projeto.fator_km_por_unidade,
+            )
+            janela._confirmar_operacao()
+        self.assertEqual(janela.projeto.ruas[chave].pontos_intermediarios, [alterado])
+        self.assertIsNone(janela.rota_calculada)
+
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = Path(pasta) / "rua-editada.json"
+            self.assertTrue(janela.salvar_projeto(caminho))
+            self.assertTrue(janela.abrir_projeto(caminho))
+        self.assertEqual(
+            janela.projeto.geometria_rua("X", "D").pontos_intermediarios,
+            [alterado],
+        )
 
     def test_limpar_rota_remove_resultados_e_destaques(self) -> None:
         janela = self.criar_janela()
@@ -520,6 +826,264 @@ class TestNovaInterface(unittest.TestCase):
         self.assertEqual(janela.visualizacao.origem_ultimo_pick, "cidade")
         self.assertEqual(recebidos[-1][3:5], ("wh_plane_0", "plane"))
 
+    def test_opengl_fluxo_visual_do_cenario_inicial(self) -> None:
+        """Exercita A–E com os GLBs reais quando há um backend OpenGL."""
+        janela = self.criar_janela_limpa()
+        janela.resize(1366, 768)
+        self.aplicacao.processEvents()
+        janela.visualizacao.inicializar()
+        for _ in range(40):
+            self.aplicacao.processEvents()
+            QTest.qWait(15)
+        if not janela.visualizacao.renderizacao_real_disponivel:
+            self.skipTest("O backend atual não oferece Qt Quick 3D/OpenGL real.")
+
+        self.assertTrue(janela.visualizacao.modelos_visiveis_na_cena)
+        self.assertIsNotNone(janela.visualizacao.mapa_trafegabilidade)
+        self.assertEqual(len(janela.grafo.listar_vertices()), 1)
+        self.assertEqual(janela.grafo.listar_clientes(), [])
+        self.assertIsNone(janela.rota_calculada)
+        estacionamento = janela.projeto.estacionamento_inicial
+        self.assertIsNotNone(estacionamento)
+        self.assertTrue(estacionamento.validado)
+        self.assertEqual(janela.visualizacao.posicao_carro, estacionamento.posicao)
+        self.assertEqual(
+            janela.visualizacao.orientacao_carro,
+            estacionamento.orientacao_graus,
+        )
+
+        alvo = (-0.30, estacionamento.posicao[1], 0.065)
+        validacao = janela.visualizacao.validar_posicao_trafegavel(alvo)
+        self.assertTrue(validacao.valido, validacao.motivo)
+        tela_x, tela_y, profundidade = janela.visualizacao.projetar_ponto(alvo)
+        self.assertGreater(profundidade, 0)
+        janela._ativar_adicao(TipoVertice.CLIENTE)
+
+        def cadastrar() -> None:
+            dialogo = QApplication.activeModalWidget()
+            if isinstance(dialogo, DialogoVertice):
+                dialogo.identificador.setText("C1")
+                dialogo.nome.setText("Cliente pelo mouse")
+                dialogo.accept()
+
+        QTimer.singleShot(0, cadastrar)
+        QTest.mouseClick(
+            janela.visualizacao,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(round(tela_x), round(tela_y)),
+        )
+        for _ in range(12):
+            self.aplicacao.processEvents()
+            QTest.qWait(10)
+        self.assertEqual(
+            [cliente.identificador for cliente in janela.grafo.listar_clientes()],
+            ["C1"],
+        )
+        self.assertGreaterEqual(janela.origem.findData("C1"), 0)
+
+        vaga_anterior = janela.projeto.estacionamento_inicial.posicao
+        novo_deposito = (-0.10, estacionamento.posicao[1], 0.065)
+        janela._ativar_definicao_deposito()
+        janela._clicar_superficie(
+            novo_deposito,
+            janela.configuracao_inicial.superficie_estacionamento,
+        )
+        vaga_redefinida = janela.projeto.estacionamento_inicial
+        self.assertEqual(janela.projeto.posicoes["D"], novo_deposito)
+        self.assertTrue(vaga_redefinida.validado)
+        self.assertEqual(vaga_redefinida.deposito, "D")
+        self.assertNotEqual(vaga_redefinida.posicao, vaga_anterior)
+        self.assertEqual(
+            janela.visualizacao.posicao_carro, vaga_redefinida.posicao
+        )
+
+        caminho = Path(__file__).parents[1] / "delivery-route-5-entregas.json"
+        conteudo_original = caminho.read_bytes()
+        self.assertTrue(janela.abrir_projeto(caminho))
+        self.assertEqual(len(janela.grafo.listar_clientes()), 5)
+        vaga_carregada = janela.projeto.estacionamento_inicial
+        self.assertIsNotNone(vaga_carregada)
+        self.assertTrue(vaga_carregada.validado)
+        self.assertEqual(
+            vaga_carregada.deposito,
+            janela.grafo.obter_deposito().identificador,
+        )
+        self.assertEqual(janela.visualizacao.posicao_carro, vaga_carregada.posicao)
+        self.assertTrue(janela.novo_cenario(confirmar=False))
+        self.assertEqual(len(janela.grafo.listar_vertices()), 1)
+        self.assertEqual(janela.grafo.listar_clientes(), [])
+        vaga_nova = janela.projeto.estacionamento_inicial
+        self.assertTrue(vaga_nova.validado)
+        self.assertEqual(janela.visualizacao.posicao_carro, vaga_nova.posicao)
+        self.assertEqual(caminho.read_bytes(), conteudo_original)
+
+    def test_grafico_real_seleciona_e_arrasta_controle_sem_salvar(self) -> None:
+        janela = self.criar_janela()
+        janela.resize(1366, 768)
+        self.aplicacao.processEvents()
+        janela.visualizacao.inicializar()
+        for _ in range(40):
+            self.aplicacao.processEvents()
+        if not janela.visualizacao.renderizacao_real_disponivel:
+            self.skipTest("O backend atual não oferece Qt Quick 3D/OpenGL real.")
+        caminho = Path(__file__).parents[1] / "delivery-route-cidade-completa.json"
+        self.assertTrue(janela.abrir_projeto(caminho))
+        for _ in range(12):
+            self.aplicacao.processEvents()
+
+        escolhido = None
+        for chave, geometria in janela.projeto.ruas.items():
+            pontos = janela.projeto.polilinha_rua(*chave)
+            if len(pontos) < 2:
+                continue
+            meio = tuple((a + b) / 2 for a, b in zip(pontos[0], pontos[1]))
+            px, py, profundidade = janela.visualizacao.projetar_ponto(meio)
+            extremo_tela = janela.visualizacao.projetar_ponto(pontos[1])
+            if (
+                profundidade > 0
+                and 20 < px < janela.visualizacao.width() - 20
+                and 20 < py < janela.visualizacao.height() - 20
+            ):
+                escolhido = (
+                    chave,
+                    meio,
+                    QPoint(round(px), round(py)),
+                    QPoint(round(extremo_tela[0]), round(extremo_tela[1])),
+                )
+                break
+        self.assertIsNotNone(escolhido)
+        chave, meio, tela, extremo_tela = escolhido
+        dx = extremo_tela.x() - tela.x()
+        dy = extremo_tela.y() - tela.y()
+        norma = max((dx * dx + dy * dy) ** 0.5, 1.0)
+        clique_tolerante = QPoint(
+            round(tela.x() - 6 * dy / norma),
+            round(tela.y() + 6 * dx / norma),
+        )
+        janela.visualizacao.solicitar_pick(
+            clique_tolerante.x(), clique_tolerante.y()
+        )
+        for _ in range(5):
+            self.aplicacao.processEvents()
+        self.assertEqual(janela.editor.selecao, ("aresta", *chave))
+
+        janela._editar_selecao()
+        janela.editor.inserir_ponto_intermediario(0, meio)
+        janela._sincronizar_cena()
+        for _ in range(5):
+            self.aplicacao.processEvents()
+        controle = janela.visualizacao.projetar_ponto(
+            (meio[0], meio[1] + 0.026, meio[2])
+        )
+        origem = QPoint(round(controle[0]), round(controle[1]))
+        destino = QPoint(
+            round(origem.x() + 6 * dx / norma),
+            round(origem.y() + 6 * dy / norma),
+        )
+        QTest.mousePress(janela.visualizacao, Qt.MouseButton.LeftButton, pos=origem)
+        self.aplicacao.processEvents()
+        self.assertEqual(
+            janela.editor.operacao_rua.arrastando,
+            0,
+            msg=f"Controle não capturado em {origem}; {janela.instrucao_editor.text()}",
+        )
+        QTest.mouseMove(janela.visualizacao, destino, delay=25)
+        self.aplicacao.processEvents()
+        previa_movida = janela.editor.operacao_rua.pontos_intermediarios[0]
+        self.assertNotEqual(
+            previa_movida,
+            meio,
+            msg=f"Prévia não acompanhou o mouse; {janela.instrucao_editor.text()}",
+        )
+        QTest.mouseRelease(
+            janela.visualizacao, Qt.MouseButton.LeftButton, pos=destino
+        )
+        for _ in range(8):
+            self.aplicacao.processEvents()
+        self.assertNotEqual(
+            janela.editor.operacao_rua.pontos_intermediarios[0],
+            meio,
+            msg=f"Arraste foi revertido; {janela.instrucao_editor.text()}",
+        )
+        self.assertEqual(
+            janela.projeto.geometria_rua(*chave).pontos_intermediarios, []
+        )
+        janela._cancelar_operacao()
+        self.assertEqual(
+            janela.projeto.geometria_rua(*chave).pontos_intermediarios, []
+        )
+
+    def test_opengl_missao_tem_dinamica_curvas_entregas_e_4x(self) -> None:
+        """Demonstra A–G com cidade, carro, câmera e renderização reais."""
+        janela = self.criar_janela_limpa()
+        janela.resize(1366, 768)
+        self.aplicacao.processEvents()
+        janela.visualizacao.inicializar()
+        for _ in range(40):
+            self.aplicacao.processEvents()
+            QTest.qWait(15)
+        if not janela.visualizacao.renderizacao_real_disponivel:
+            self.skipTest("O backend atual não oferece Qt Quick 3D/OpenGL real.")
+
+        caminho = (
+            Path(__file__).parents[1]
+            / "delivery-route-cidade-completa-corrigida.json"
+        )
+        self.assertTrue(janela.abrir_projeto(caminho))
+        indice_tsp = janela.seletor_algoritmo.findData("tsp")
+        janela.seletor_algoritmo.setCurrentIndex(indice_tsp)
+        janela.selecionar_todos_clientes.setChecked(True)
+        janela.botao_calcular.click()
+        self.assertTrue(janela.botao_iniciar.isEnabled())
+        janela.botao_iniciar.click()
+        janela.animacao_missao.timer.stop()
+        janela.seletor_velocidade.setCurrentIndex(3)
+
+        inicial = janela.controlador_missao.quadro()
+        estacionamento = janela.projeto.estacionamento_inicial
+        self.assertEqual(inicial.velocidade_atual, 0.0)
+        self.assertEqual(inicial.posicao, estacionamento.posicao)
+        self.assertEqual(
+            janela.visualizacao.camera.modo, ModoCamera.ATRAS_DO_CARRO
+        )
+
+        fases = {inicial.fase_movimento}
+        entregas: list[str] = []
+        quadro = inicial
+        for indice in range(1_000):
+            quadro = janela.controlador_missao.avancar(0.05)
+            janela._atualizar_quadro_missao(quadro, 0.05)
+            fases.add(quadro.fase_movimento)
+            entregas.extend(
+                evento.vertice
+                for evento in quadro.eventos
+                if evento.tipo is TipoEventoMissao.ENTREGA
+            )
+            if indice % 8 == 0:
+                self.aplicacao.processEvents()
+            if quadro.estado is EstadoMissao.CONCLUIDA:
+                break
+
+        self.assertEqual(quadro.estado, EstadoMissao.CONCLUIDA)
+        self.assertTrue(
+            {
+                FaseMovimento.ACELERANDO,
+                FaseMovimento.FREANDO_CURVA,
+                FaseMovimento.EM_CURVA,
+                FaseMovimento.FREANDO_ENTREGA,
+                FaseMovimento.ENTREGANDO,
+                FaseMovimento.RETOMANDO,
+                FaseMovimento.FREANDO_DESTINO,
+                FaseMovimento.CONCLUIDO,
+            }.issubset(fases)
+        )
+        self.assertEqual(len(entregas), 5)
+        self.assertEqual(len(set(entregas)), 5)
+        self.assertEqual(quadro.posicao, estacionamento.posicao)
+        self.assertEqual(janela.visualizacao.posicao_carro, estacionamento.posicao)
+        self.assertTrue(janela.visualizacao.camera_seguidora.inicializada)
+        self.assertIn("0.000 unid./s", janela.indicador_velocidade.text())
+
     def test_sincronizacao_nao_recria_campos_quando_grafo_nao_mudou(self) -> None:
         janela = self.criar_janela()
         janela._sincronizar_cena()
@@ -561,6 +1125,7 @@ class TestNovaInterface(unittest.TestCase):
             janela = JanelaPrincipal(
                 conversor=ConversorBalsam(cache),
                 auto_inicializar_3d=False,
+                projeto_inicial=ProjetoCidade(grafo=criar_cenario_exemplo()),
             )
             janela.show()
             self.addCleanup(self._fechar, janela)
@@ -577,7 +1142,11 @@ class TestNovaInterface(unittest.TestCase):
             self.assertIsNotNone(visualizacao.info_cidade)
             self.assertIsNotNone(visualizacao.info_carro)
             self.assertTrue(visualizacao.modelos_visiveis_na_cena)
-            self.assertTrue(all(botao.isEnabled() for botao in janela.botoes_edicao))
+            self.assertTrue(janela.botao_navegar.isEnabled())
+            self.assertTrue(janela.botao_adicionar_ponto.isEnabled())
+            self.assertTrue(janela.botao_adicionar_cliente.isEnabled())
+            self.assertTrue(janela.botao_definir_deposito.isEnabled())
+            self.assertTrue(janela.botao_criar_rua.isEnabled())
             recebidos = []
             visualizacao.ponto_selecionado.connect(lambda *dados: recebidos.append(dados))
             visualizacao.rootObject().pontoSelecionado.emit(

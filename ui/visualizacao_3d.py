@@ -7,9 +7,17 @@ from pathlib import Path
 from typing import Sequence
 
 from PySide6 import QtQuick3D  # noqa: F401 - registra os tipos QML
-from PySide6.QtCore import QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuickWidgets import QQuickWidget
+
+from models.estacionamento import DimensoesVeiculo, resolver_estacionamento
+from models.projeto_cidade import EstacionamentoVeiculo, ProjetoCidade
+from models.trafegabilidade import (
+    MapaTrafegabilidade,
+    ResultadoValidacaoTrajeto,
+    TipoRegiao,
+)
 
 from .assets_3d import (
     ESCALA_CARRO_PADRAO,
@@ -22,11 +30,16 @@ from .assets_3d import (
 )
 from .camera_orbital import CameraOrbital, ModoCamera
 from .camera_seguidora import CameraSeguidora
+from .reconhecimento_superficies import (
+    ResultadoReconhecimento,
+    reconhecer_superficies,
+)
 
 
 # O GLB foi inspecionado por malha/material: grade e para-choque dianteiros
 # estão no extremo -Z. O yaw da rota usa +Z como zero, logo o asset requer 180°.
 CORRECAO_FRONTAL_CARRO_GRAUS = 180.0
+FOLGA_PAVIMENTO_CARRO = 0.00025
 
 
 class ErroRenderizacao3D(RuntimeError):
@@ -39,6 +52,9 @@ class Visualizacao3D(QQuickWidget):
     estado_alterado = Signal(str, bool)
     camera_alterada = Signal(str)
     ponto_selecionado = Signal(float, float, float, str, str, bool)
+    arraste_controle_iniciado = Signal(int)
+    arraste_controle_atualizado = Signal(float, float, float, str, str, bool)
+    arraste_controle_finalizado = Signal(bool)
 
     def __init__(
         self,
@@ -67,8 +83,11 @@ class Visualizacao3D(QQuickWidget):
         self.camera_seguidora = CameraSeguidora()
         self.info_cidade: InformacoesModelo3D | None = None
         self.info_carro: InformacoesModelo3D | None = None
+        self.resultado_reconhecimento: ResultadoReconhecimento | None = None
+        self.mapa_trafegabilidade: MapaTrafegabilidade | None = None
         self.posicao_carro = (0.0, 0.0, 0.0)
         self.orientacao_carro = 0.0
+        self.freando_carro = False
         self.escala_cidade = ESCALA_CIDADE_PADRAO
         self.escala_carro = ESCALA_CARRO_PADRAO
         self.inicializado = False
@@ -83,6 +102,8 @@ class Visualizacao3D(QQuickWidget):
         self._modo_interacao = "navegar"
         self._origem_ultimo_pick = "nenhuma"
         self._rede_ruas_visivel = True
+        self._indice_controle_arraste: int | None = None
+        self._ultimo_arraste_encontrado = False
 
     @property
     def referencias_modelos(self) -> tuple[Path, Path]:
@@ -145,6 +166,29 @@ class Visualizacao3D(QQuickWidget):
 
             self.info_cidade = inspecionar_modelo(self.caminho_cidade)
             self.info_carro = inspecionar_modelo(self.caminho_carro)
+            try:
+                self.resultado_reconhecimento = reconhecer_superficies(
+                    self.caminho_cidade,
+                    escala=self.escala_cidade,
+                    progresso=self._progresso_reconhecimento,
+                )
+            except (OSError, TypeError, ValueError, RuntimeError) as erro:
+                self.resultado_reconhecimento = None
+                self.mapa_trafegabilidade = None
+                self._registrar(
+                    "Reconhecimento automático indisponível; a cidade continuará "
+                    f"com seleção visual restrita ao asfalto: {erro}"
+                )
+            else:
+                self.mapa_trafegabilidade = self.resultado_reconhecimento.mapa
+                resumo = self.resultado_reconhecimento.estatisticas
+                origem_mapa = (
+                    "cache" if self.resultado_reconhecimento.veio_do_cache else "GLB"
+                )
+                self._registrar(
+                    "Mapa viário automático pronto "
+                    f"({origem_mapa}): {resumo.get(TipoRegiao.RUA, 0)} células de rua."
+                )
             conversor = self.conversor or ConversorBalsam()
             self.conversor = conversor
             self._registrar("Preparando cidade.glb e carro.glb no cache Balsam…")
@@ -168,6 +212,9 @@ class Visualizacao3D(QQuickWidget):
             sinal_pick = getattr(raiz, "pontoSelecionado", None)
             if sinal_pick is not None:
                 sinal_pick.connect(self._receber_pick)
+            sinal_arraste = getattr(raiz, "pontoArraste", None)
+            if sinal_arraste is not None:
+                sinal_arraste.connect(self._receber_arraste)
             QTimer.singleShot(0, self._atualizar_estado_modelos)
             self._registrar(
                 "Modelos preparados; aguardando a materialização gráfica da cena."
@@ -175,6 +222,12 @@ class Visualizacao3D(QQuickWidget):
         except (ErroModelo3D, ErroRenderizacao3D, OSError) as erro:
             self.erro_inicializacao = str(erro)
             self._registrar(f"Falha na cena 3D: {erro}", False)
+
+    def _progresso_reconhecimento(self, mensagem: str) -> None:
+        self._registrar(mensagem)
+        # A análise inicial é síncrona para manter o estado determinístico, mas
+        # libera eventos entre etapas para que o indicador seja realmente visto.
+        QCoreApplication.processEvents()
 
     def _atualizar_estado_modelos(self) -> None:
         if self.modelos_visiveis_na_cena:
@@ -208,10 +261,91 @@ class Visualizacao3D(QQuickWidget):
             raiz.setProperty("posicaoCarro", QVector3D(*self.posicao_carro))
             raiz.setProperty("centroModeloCarro", QVector3D(*carro.centro))
             raiz.setProperty("minimoModeloCarro", QVector3D(*carro.minimo))
-            raiz.setProperty("alturaCarro", 0.008)
+            raiz.setProperty("alturaCarro", FOLGA_PAVIMENTO_CARRO)
             self.atualizar_carro(
                 self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
             )
+
+    def posicionar_estacionamento(
+        self, projeto: ProjetoCidade
+    ) -> EstacionamentoVeiculo:
+        """Resolve a vaga pela malha real e aplica a pose antes da missão."""
+        if self.info_carro is None:
+            raise ErroRenderizacao3D("O modelo do carro ainda não foi inspecionado.")
+        mapa = self.mapa_trafegabilidade
+        if mapa is None:
+            raise ErroRenderizacao3D(
+                "O mapa automático de trafegabilidade ainda não está pronto."
+            )
+        dimensoes_modelo = self.info_carro.limites.dimensoes
+        dimensoes = DimensoesVeiculo(
+            largura=dimensoes_modelo[0] * self.escala_carro,
+            altura=dimensoes_modelo[1] * self.escala_carro,
+            comprimento=dimensoes_modelo[2] * self.escala_carro,
+        )
+        estacionamento = resolver_estacionamento(projeto, mapa, dimensoes)
+        projeto.estacionamento_inicial = estacionamento
+        self.atualizar_carro(
+            estacionamento.posicao,
+            estacionamento.orientacao_graus,
+            0.0,
+            imediato=True,
+        )
+        return estacionamento
+
+    def dimensoes_veiculo(self) -> DimensoesVeiculo:
+        if self.info_carro is None:
+            raise ErroRenderizacao3D("O modelo do carro ainda não foi inspecionado.")
+        dimensoes = self.info_carro.limites.dimensoes
+        return DimensoesVeiculo(
+            largura=dimensoes[0] * self.escala_carro,
+            altura=dimensoes[1] * self.escala_carro,
+            comprimento=dimensoes[2] * self.escala_carro,
+        )
+
+    @property
+    def meia_largura_seguranca(self) -> float:
+        try:
+            return self.dimensoes_veiculo().largura * 0.5 + 0.006
+        except ErroRenderizacao3D:
+            return 0.0
+
+    def validar_posicao_trafegavel(
+        self,
+        posicao: tuple[float, float, float],
+        *,
+        considerar_largura: bool = False,
+    ) -> ResultadoValidacaoTrajeto:
+        if self.mapa_trafegabilidade is None:
+            return ResultadoValidacaoTrajeto(
+                False, False, "O reconhecimento automático ainda não terminou."
+            )
+        return self.mapa_trafegabilidade.validar_posicao(
+            posicao,
+            self.meia_largura_seguranca if considerar_largura else 0.0,
+        )
+
+    def validar_rua_automatica(
+        self, pontos: Sequence[tuple[float, float, float]]
+    ) -> ResultadoValidacaoTrajeto:
+        if self.mapa_trafegabilidade is None:
+            return ResultadoValidacaoTrajeto(
+                False, False, "O reconhecimento automático ainda não terminou."
+            )
+        return self.mapa_trafegabilidade.validar_polilinha(
+            tuple(pontos), self.meia_largura_seguranca
+        )
+
+    def sugerir_tracado_rua(
+        self,
+        inicio: tuple[float, float, float],
+        fim: tuple[float, float, float],
+    ) -> list[tuple[float, float, float]] | None:
+        if self.mapa_trafegabilidade is None:
+            return None
+        return self.mapa_trafegabilidade.sugerir_caminho(
+            inicio, fim, self.meia_largura_seguranca
+        )
 
     def _aplicar_camera(self) -> None:
         raiz = self.rootObject()
@@ -265,7 +399,11 @@ class Visualizacao3D(QQuickWidget):
         self.camera.preparar_camera_atras_do_carro(self.posicao_carro)
         self.camera_seguidora.reiniciar()
         self.atualizar_carro(
-            self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
+            self.posicao_carro,
+            self.orientacao_carro,
+            0.0,
+            imediato=True,
+            freando=self.freando_carro,
         )
         self._aplicar_camera()
 
@@ -276,11 +414,13 @@ class Visualizacao3D(QQuickWidget):
         delta_segundos: float = 0.0,
         *,
         imediato: bool = False,
+        freando: bool = False,
     ) -> None:
         if len(posicao) != 3:
             raise ValueError("A posição do carro deve possuir três coordenadas.")
         self.posicao_carro = tuple(float(valor) for valor in posicao)
         self.orientacao_carro = float(orientacao_graus)
+        self.freando_carro = bool(freando)
         camera, alvo = self.camera_seguidora.atualizar(
             self.posicao_carro,
             self.orientacao_carro,
@@ -295,13 +435,18 @@ class Visualizacao3D(QQuickWidget):
             "rotacaoCarro",
             self.orientacao_carro + CORRECAO_FRONTAL_CARRO_GRAUS,
         )
+        raiz.setProperty("freandoCarro", self.freando_carro)
         raiz.setProperty("cameraSeguimentoPosicao", QVector3D(*camera))
         raiz.setProperty("cameraSeguimentoAlvo", QVector3D(*alvo))
 
     def configurar_camera_seguidora(self, distancia: float, altura: float) -> None:
         self.camera_seguidora.configurar(distancia=distancia, altura=altura)
         self.atualizar_carro(
-            self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
+            self.posicao_carro,
+            self.orientacao_carro,
+            0.0,
+            imediato=True,
+            freando=self.freando_carro,
         )
 
     def definir_modo_interacao(self, modo: str) -> None:
@@ -311,6 +456,7 @@ class Visualizacao3D(QQuickWidget):
             "criar_rua",
             "classificar_superficie",
             "reposicionar_vertice",
+            "editar_tracado",
         }:
             raise ValueError(f"Modo de interação desconhecido: {modo}")
         self._modo_interacao = modo
@@ -335,6 +481,18 @@ class Visualizacao3D(QQuickWidget):
         raiz = self.rootObject()
         origem = raiz.property("origemUltimoPick") if raiz is not None else None
         self._origem_ultimo_pick = str(origem or "nenhuma")
+        if (
+            objeto.startswith("controle-rua:")
+            and self._modo_interacao in {"editar_tracado", "criar_rua"}
+        ):
+            try:
+                indice = int(objeto.partition(":")[2])
+            except ValueError:
+                indice = -1
+            if indice >= 0:
+                self._indice_controle_arraste = indice
+                self._ultimo_arraste_encontrado = True
+                self.arraste_controle_iniciado.emit(indice)
         self.ponto_selecionado.emit(
             float(x),
             float(y),
@@ -348,13 +506,55 @@ class Visualizacao3D(QQuickWidget):
     def origem_ultimo_pick(self) -> str:
         return self._origem_ultimo_pick
 
+    @property
+    def diagnostico_ultimo_pick(self) -> str:
+        raiz = self.rootObject()
+        diagnostico = raiz.property("diagnosticoUltimoPick") if raiz is not None else None
+        return str(diagnostico or "nenhum")
+
+    def _coordenadas_view3d(self, x: float, y: float) -> tuple[float, float]:
+        """Converte coordenadas lógicas do QQuickWidget para a raiz/View3D."""
+        raiz = self.rootObject()
+        if raiz is None or self.width() <= 0 or self.height() <= 0:
+            return float(x), float(y)
+        largura = float(raiz.width())
+        altura = float(raiz.height())
+        return (
+            float(x) * largura / float(self.width()),
+            float(y) * altura / float(self.height()),
+        )
+
     def solicitar_pick(self, x: float, y: float) -> None:
         raiz = self.rootObject()
         if raiz is None:
             return
+        x, y = self._coordenadas_view3d(x, y)
         raiz.setProperty("pickY", -1.0)
         raiz.setProperty("pickX", float(x))
         raiz.setProperty("pickY", float(y))
+
+    def solicitar_pick_arraste(self, x: float, y: float) -> None:
+        raiz = self.rootObject()
+        if raiz is None:
+            return
+        x, y = self._coordenadas_view3d(x, y)
+        raiz.setProperty("arrastePickY", -1.0)
+        raiz.setProperty("arrastePickX", float(x))
+        raiz.setProperty("arrastePickY", float(y))
+
+    def _receber_arraste(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        objeto: str,
+        material: str,
+        encontrado: bool,
+    ) -> None:
+        self._ultimo_arraste_encontrado = bool(encontrado)
+        self.arraste_controle_atualizado.emit(
+            float(x), float(y), float(z), str(objeto), str(material), bool(encontrado)
+        )
 
     def atualizar_marcadores(self, marcadores: list[dict[str, object]]) -> None:
         raiz = self.rootObject()
@@ -376,6 +576,11 @@ class Visualizacao3D(QQuickWidget):
         raiz = self.rootObject()
         if raiz is not None:
             raiz.setProperty("segmentosPrevia", list(segmentos))
+
+    def atualizar_controles_rua(self, controles: list[dict[str, object]]) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("controlesRua", list(controles))
 
     def atualizar_destaque_rota(
         self,
@@ -403,6 +608,15 @@ class Visualizacao3D(QQuickWidget):
         self.camera.focar(centro, dimensoes)
         self._aplicar_camera()
         return True
+
+    def projetar_ponto(self, ponto: Sequence[float]) -> tuple[float, float, float]:
+        if len(ponto) != 3:
+            raise ValueError("A posição deve possuir três coordenadas.")
+        raiz = self.rootObject()
+        if raiz is None:
+            raise ErroRenderizacao3D("A cena QML ainda não está disponível.")
+        projetado = raiz.projetarCena(*(float(valor) for valor in ponto))
+        return float(projetado.x()), float(projetado.y()), float(projetado.z())
 
     def mostrar_marcador_temporario(
         self, posicao: tuple[float, float, float] | None
@@ -434,6 +648,11 @@ class Visualizacao3D(QQuickWidget):
             self._posicao_mouse = evento.position()
             self._botao_mouse = evento.button()
             self._mouse_arrastou = False
+            if (
+                evento.button() == Qt.MouseButton.LeftButton
+                and self._modo_interacao in {"editar_tracado", "criar_rua"}
+            ):
+                self.solicitar_pick(evento.position().x(), evento.position().y())
             evento.accept()
             return
         super().mousePressEvent(evento)
@@ -444,7 +663,11 @@ class Visualizacao3D(QQuickWidget):
             self._posicao_mouse = evento.position()
             if abs(delta.x()) + abs(delta.y()) > 2:
                 self._mouse_arrastou = True
-            if (
+            if self._indice_controle_arraste is not None:
+                self.solicitar_pick_arraste(
+                    evento.position().x(), evento.position().y()
+                )
+            elif (
                 self._botao_mouse == Qt.MouseButton.LeftButton
                 and self._modo_interacao == "navegar"
             ):
@@ -458,9 +681,17 @@ class Visualizacao3D(QQuickWidget):
     def mouseReleaseEvent(self, evento) -> None:  # noqa: N802 - API Qt
         if evento.button() == self._botao_mouse:
             posicao = evento.position()
+            estava_arrastando_controle = self._indice_controle_arraste is not None
+            if estava_arrastando_controle:
+                self.solicitar_pick_arraste(posicao.x(), posicao.y())
+                self.arraste_controle_finalizado.emit(
+                    self._ultimo_arraste_encontrado
+                )
+                self._indice_controle_arraste = None
             deve_selecionar = (
                 evento.button() == Qt.MouseButton.LeftButton
                 and not self._mouse_arrastou
+                and not estava_arrastando_controle
             )
             self._posicao_mouse = None
             self._botao_mouse = None

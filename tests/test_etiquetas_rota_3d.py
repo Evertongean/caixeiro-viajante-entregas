@@ -226,6 +226,14 @@ class TestEtiquetasERota3D(unittest.TestCase):
         self.raiz.setProperty("mostrarRedeRuas", False)
         self.assertFalse(self.raiz.property("mostrarRedeRuas"))
 
+    def test_distancia_de_selecao_da_rua_e_em_pixels(self) -> None:
+        sobre = self.raiz.distanciaSegmento2D(50, 4, 0, 0, 100, 0).toVariant()
+        fora = self.raiz.distanciaSegmento2D(50, 11, 0, 0, 100, 0).toVariant()
+        self.assertAlmostEqual(float(sobre["distancia"]), 4.0)
+        self.assertAlmostEqual(float(fora["distancia"]), 11.0)
+        fonte = self.qml.read_text(encoding="utf-8")
+        self.assertIn("medida.distancia > tolerancia", fonte)
+
 
 if __name__ == "__main__":
     unittest.main()

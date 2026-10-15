@@ -42,6 +42,17 @@ class GeometriaRua:
 
 
 @dataclass(slots=True)
+class EstacionamentoVeiculo:
+    """Pose inicial independente da posição lógica do depósito."""
+
+    deposito: str
+    posicao: tuple[float, float, float]
+    orientacao_graus: float
+    superficie: str | None = None
+    validado: bool = False
+
+
+@dataclass(slots=True)
 class ProjetoCidade:
     grafo: Grafo
     posicoes: dict[str, tuple[float, float, float]] = field(default_factory=dict)
@@ -50,6 +61,7 @@ class ProjetoCidade:
     modelo_cidade: str = "assets/models/cidade.glb"
     modelo_carro: str = "assets/models/carro.glb"
     fator_km_por_unidade: float = 1.0
+    estacionamento_inicial: EstacionamentoVeiculo | None = None
 
     @staticmethod
     def chave_aresta(origem: str, destino: str) -> tuple[str, str]:
@@ -121,6 +133,39 @@ def projeto_para_dados(projeto: ProjetoCidade) -> dict[str, Any]:
         if not isinstance(classificacao, ClassificacaoSuperficie):
             raise TypeError("Uma classificação de superfície é inválida.")
 
+    estacionamento = projeto.estacionamento_inicial
+    dados_estacionamento: dict[str, Any] | None = None
+    if estacionamento is not None:
+        if estacionamento.deposito not in vertices:
+            raise ValueError("O estacionamento referencia um depósito inexistente.")
+        vertice_deposito = projeto.grafo.obter_vertice(estacionamento.deposito)
+        if vertice_deposito.tipo.value != "depósito":
+            raise ValueError("O estacionamento deve estar associado ao depósito.")
+        posicao_estacionamento = _vetor3(
+            estacionamento.posicao, "estacionamento_inicial.posicao"
+        )
+        orientacao = estacionamento.orientacao_graus
+        if (
+            isinstance(orientacao, bool)
+            or not isinstance(orientacao, (int, float))
+            or not math.isfinite(orientacao)
+        ):
+            raise ValueError("A orientação do estacionamento deve ser finita.")
+        if estacionamento.superficie is not None and (
+            not isinstance(estacionamento.superficie, str)
+            or not estacionamento.superficie
+        ):
+            raise ValueError("A superfície do estacionamento é inválida.")
+        if not isinstance(estacionamento.validado, bool):
+            raise TypeError("O estado de validação do estacionamento deve ser booleano.")
+        dados_estacionamento = {
+            "deposito": estacionamento.deposito,
+            "posicao": list(posicao_estacionamento),
+            "orientacao_graus": float(orientacao),
+            "superficie": estacionamento.superficie,
+            "validado": estacionamento.validado,
+        }
+
     ruas = []
     for chave, geometria in sorted(projeto.ruas.items()):
         if chave != projeto.chave_aresta(geometria.origem, geometria.destino):
@@ -139,6 +184,20 @@ def projeto_para_dados(projeto: ProjetoCidade) -> dict[str, Any]:
                 "calibrada_manualmente": geometria.calibrada_manualmente,
             }
         )
+    editor_3d: dict[str, Any] = {
+        "posicoes": {
+            identificador: list(posicao)
+            for identificador, posicao in sorted(posicoes.items())
+        },
+        "ruas": ruas,
+        "superficies": {
+            superficie: classificacao.value
+            for superficie, classificacao in sorted(projeto.superficies.items())
+        },
+        "fator_km_por_unidade": float(projeto.fator_km_por_unidade),
+    }
+    if dados_estacionamento is not None:
+        editor_3d["estacionamento_inicial"] = dados_estacionamento
     return {
         "formato": FORMATO_PROJETO_CIDADE,
         "versao": VERSAO_PROJETO_CIDADE,
@@ -147,18 +206,7 @@ def projeto_para_dados(projeto: ProjetoCidade) -> dict[str, Any]:
             "carro": projeto.modelo_carro,
         },
         "grafo": grafo_para_dados(projeto.grafo),
-        "editor_3d": {
-            "posicoes": {
-                identificador: list(posicao)
-                for identificador, posicao in sorted(posicoes.items())
-            },
-            "ruas": ruas,
-            "superficies": {
-                superficie: classificacao.value
-                for superficie, classificacao in sorted(projeto.superficies.items())
-            },
-            "fator_km_por_unidade": float(projeto.fator_km_por_unidade),
-        },
+        "editor_3d": editor_3d,
     }
 
 
@@ -271,6 +319,50 @@ def projeto_de_dados(dados: Any) -> ProjetoCidade:
             continue
         ruas[chave] = geometria
 
+    estacionamento: EstacionamentoVeiculo | None = None
+    estacionamento_bruto = editor.get("estacionamento_inicial")
+    if estacionamento_bruto is not None:
+        if not isinstance(estacionamento_bruto, dict):
+            raise ErroPersistencia("'estacionamento_inicial' deve ser um objeto.")
+        deposito = estacionamento_bruto.get("deposito")
+        if not isinstance(deposito, str) or deposito not in vertices:
+            raise ErroPersistencia(
+                "O estacionamento referencia um depósito inexistente."
+            )
+        if grafo.obter_vertice(deposito).tipo.value != "depósito":
+            raise ErroPersistencia(
+                "O estacionamento deve estar associado ao depósito."
+            )
+        orientacao = estacionamento_bruto.get("orientacao_graus")
+        if (
+            isinstance(orientacao, bool)
+            or not isinstance(orientacao, (int, float))
+            or not math.isfinite(orientacao)
+        ):
+            raise ErroPersistencia(
+                "A orientação do estacionamento deve ser um número finito."
+            )
+        superficie = estacionamento_bruto.get("superficie")
+        if superficie is not None and (
+            not isinstance(superficie, str) or not superficie
+        ):
+            raise ErroPersistencia("A superfície do estacionamento é inválida.")
+        validado = estacionamento_bruto.get("validado", False)
+        if not isinstance(validado, bool):
+            raise ErroPersistencia(
+                "O estado de validação do estacionamento deve ser booleano."
+            )
+        estacionamento = EstacionamentoVeiculo(
+            deposito=deposito,
+            posicao=_vetor3(
+                estacionamento_bruto.get("posicao"),
+                "estacionamento_inicial.posicao",
+            ),
+            orientacao_graus=float(orientacao),
+            superficie=superficie,
+            validado=validado,
+        )
+
     return ProjetoCidade(
         grafo=grafo,
         posicoes=posicoes,
@@ -279,6 +371,7 @@ def projeto_de_dados(dados: Any) -> ProjetoCidade:
         modelo_cidade=cidade,
         modelo_carro=carro,
         fator_km_por_unidade=float(fator),
+        estacionamento_inicial=estacionamento,
     )
 
 
@@ -326,6 +419,7 @@ def carregar_projeto_cidade(caminho: str | os.PathLike[str]) -> ProjetoCidade:
 
 __all__ = [
     "ClassificacaoSuperficie",
+    "EstacionamentoVeiculo",
     "FORMATO_PROJETO_CIDADE",
     "GeometriaRua",
     "ProjetoCidade",

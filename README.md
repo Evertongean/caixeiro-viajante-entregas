@@ -11,6 +11,19 @@ no grafo editado e seus percursos espaciais são destacados na cidade. Uma
 missão animada move o carro real pelas polilinhas calibradas, registra entregas
 e oferece câmera de perseguição.
 
+Ao abrir a interface, a cidade começa em um estado mínimo: somente o depósito
+`D — Depósito Central`, nenhum cliente, nenhuma conexão fictícia e nenhuma
+rota. O carro usa uma vaga independente, validada sobre a pista do GLB. A
+configuração espacial desse estado fica em
+`assets/config/cidade-inicial.json`; o exemplo acadêmico de `main.py` continua
+separado e inalterado.
+
+O carro permanece vinculado ao depósito ativo durante todo o ciclo do projeto.
+Ao usar **Definir depósito** em uma cidade que já possui depósito, o ponto
+existente é reposicionado e uma nova vaga próxima, inteiramente sobre a rua e
+alinhada à via, é calculada automaticamente. Reiniciar, concluir ou encerrar
+uma missão também devolve visualmente o veículo a essa vaga.
+
 ## Requisitos
 
 - Python 3.10 ou mais recente;
@@ -56,27 +69,32 @@ python3 main.py
 │   ├── dijkstra.py
 │   └── caixeiro_viajante.py
 ├── models/
+│   ├── cenario_inicial.py     # estado mínimo e configuração da GUI
 │   ├── grafo.py
 │   ├── missao.py             # movimento, estados, progresso e entregas
 │   ├── persistencia.py
 │   ├── projeto_cidade.py     # grafo e metadados espaciais versionados
-│   └── rota.py               # resultado matemático e validação espacial
+│   ├── rota.py               # resultado matemático e validação espacial
+│   └── trafegabilidade.py    # grade, largura, segmentos e busca viária
 ├── ui/
 │   ├── animacao_missao.py    # relógio Qt não bloqueante
 │   ├── apresentacao_rota.py  # segmentos e marcadores declarativos da rota
 │   ├── assets_3d.py          # valida GLB e gerencia o cache Balsam
+│   ├── reconhecimento_superficies.py # gera o mapa viário automático
 │   ├── camera_orbital.py     # estado matemático da câmera
 │   ├── camera_seguidora.py   # câmera em terceira pessoa suavizada
 │   ├── cena_3d.qml           # cena Qt Quick 3D única
-│   ├── dialogos_editor.py    # confirmação de pontos, superfícies e pesos
+│   ├── dialogos_editor.py    # confirmação de pontos e pesos (mais legado)
 │   ├── editor_cidade.py      # operações espaciais sobre o grafo oficial
 │   ├── janela_principal.py   # layout, modos e fluxos do editor
 │   ├── tema.py               # paleta azul-marinho e estilos
 │   └── visualizacao_3d.py    # ponte QWidget/Qt Quick 3D
 ├── tests/
-├── assets/models/
-│   ├── cidade.glb
-│   └── carro.glb
+├── assets/
+│   ├── config/cidade-inicial.json
+│   └── models/
+│       ├── cidade.glb
+│       └── carro.glb
 ├── gui_main.py
 └── main.py
 ```
@@ -96,40 +114,69 @@ layout foi verificado em 1920×1080, 1366×768, 1280×720 e 960×640.
 Os controles da câmera, do enquadramento, da seção **Editar cidade**, do
 cálculo de rotas e da missão animada são funcionais.
 
+Use **Adicionar cliente** e clique no asfalto para cadastrar o primeiro local
+de entrega. **Criar rua** passa a ficar disponível quando houver ao menos dois
+pontos. Dijkstra permanece bloqueado até existirem extremos distintos e o TSP
+informa que é necessário adicionar um cliente. **Abrir** restaura exatamente o
+projeto escolhido; **Novo** volta ao estado mínimo sem alterar o arquivo aberto.
+Nenhuma sessão anterior é restaurada automaticamente.
+
 ### Editor visual
 
-O clique é resolvido por `View3D.pick()`. A cena devolve a malha, o material e
-`scenePosition`, portanto a posição já considera a hierarquia e a escala do
-GLB. O grafo usa o plano `(x, z)` da cena e o projeto conserva também a
-coordenada vertical completa `(x, y, z)`.
+O clique é resolvido por `View3D.pick()` e `pickAll()`. A cena devolve a malha,
+o material e `scenePosition`, portanto a posição já considera a hierarquia e a
+escala do GLB. Objetos auxiliares não ocultam o asfalto que está abaixo deles,
+e as coordenadas lógicas do `QQuickWidget` são convertidas para as dimensões
+reais do `View3D`. O grafo usa o plano `(x, z)` da cena e o projeto conserva
+também a coordenada vertical completa `(x, y, z)`.
 
-Os nomes do asset são genéricos e não identificam as ruas com segurança. Por
-isso nenhuma malha é considerada trafegável automaticamente:
+Antes de liberar o editor, o sistema lê os triângulos, transforms, materiais e
+cores reais de `cidade.glb` e constrói uma grade espacial. Cada célula é
+classificada como rua, calçada, edificação/obstáculo, área verde ou região
+incerta. A decisão é local: uma malha grande pode conter regiões diferentes e
+uma superfície inferior não prevalece sobre uma calçada ou construção visível
+acima dela. Neste asset não há texturas embutidas; os materiais `plane`,
+`white.001` e verdes, combinados com altura, inclinação e sobreposição
+geométrica, fornecem as pistas verificadas. Cor escura isolada não libera uma
+região como rua.
 
-1. ative **Classificar superfície**;
-2. clique no asfalto e marque a malha como **Rua trafegável**;
-3. use **Adicionar ponto**, **Adicionar cliente** ou **Definir depósito** e
-   clique sobre uma malha já classificada;
-4. confira identificador, nome e tipo no diálogo; a posição não é digitada;
-5. para uma conexão, ative **Criar rua**, selecione os dois marcadores,
-   acrescente curvas clicando no asfalto e confirme o peso oficial.
+Não existe mais **Classificar superfície** no fluxo principal. Use **Adicionar
+ponto**, **Adicionar cliente** ou **Definir depósito** e clique diretamente no
+asfalto reconhecido. Calçadas, prédios, áreas verdes e células incertas são
+rejeitados com uma explicação. Ao escolher os extremos em **Criar rua**, uma
+busca espacial sugere um traçado contido nas ruas; os controles continuam
+editáveis antes da confirmação.
 
-A classificação é persistida pela referência `objeto|material` devolvida pelo
-picking da malha importada (por exemplo, `wh_plane_0|plane`). Essa referência é
-estável enquanto o mesmo `cidade.glb` e sua conversão forem mantidos, mas não é
-uma identificação semântica: trocar ou reeditar o GLB pode alterar nomes de
-malhas e materiais. O picking distingue descendentes da cidade, do carro e dos
-elementos do editor, impedindo que carro, marcadores ou linhas sejam salvos
-como superfícies trafegáveis.
+O mapa também considera a largura real de `carro.glb` mais a margem de
+segurança. Todos os segmentos são amostrados continuamente, não apenas nos
+pontos de controle. Uma rua aparece azul acinzentada quando é válida, laranja
+quando a análise é inconclusiva e vermelha quando cruza uma região bloqueada
+ou não oferece largura suficiente.
 
 O botão **Desfazer** remove primeiro a última curva e depois os extremos; o
 botão **Cancelar** descarta toda a prévia. Em **Navegar**, marcadores e linhas
 podem ser selecionados para edição, reposicionamento ou exclusão. Exclusões
 pedem confirmação. Azul identifica o depósito, verde identifica clientes,
 cinza identifica cruzamentos e laranja identifica a operação temporária. Nas
-ruas sobrepostas ao modelo, azul indica geometria calibrada e laranja indica
-geometria pendente ou selecionada. O painel informa permanentemente qual
-ferramenta está ativa e quantas ruas ainda precisam de calibração.
+ruas sobrepostas ao modelo, as cores refletem a validação automática descrita
+acima. O painel informa permanentemente qual ferramenta está ativa e quantas
+ruas estão válidas, incertas ou inválidas.
+
+As ruas podem ser selecionadas em uma faixa de 10 pixels ao redor da linha,
+independentemente do zoom. Quando duas linhas ficam dentro dessa faixa, cliques
+repetidos no mesmo local alternam as candidatas e o painel mostra a opção
+atual. Em **Editar**, o início fica verde, o fim laranja e os controles
+intermediários claros. Arraste somente os intermediários; a linha amarela é
+uma prévia e nada é gravado antes de **Confirmar**. Um ponto inválido fica
+vermelho e volta à posição anterior quando o botão é solto.
+
+**Snap inteligente** encaixa dentro de uma distância limitada em vértices e
+segmentos confirmados. Ele não inventa o centro da pista: fora desses alvos, o
+ponto real devolvido pelo picking é mantido. Use **Adicionar ponto** e clique
+em um segmento para inserir na ordem correta, selecione um controle para
+**Remover ponto**, ou use `Ctrl+Z`, `Ctrl+Y`, `Delete`, `Enter` e `Esc` para
+desfazer, refazer, remover, confirmar e cancelar. Cancelar restaura integralmente
+o traçado original.
 
 Ao confirmar uma rua, o diálogo mostra o comprimento geométrico, o fator
 configurável em km/unidade e a sugestão resultante. O peso oficial continua
@@ -149,11 +196,11 @@ inferiores exibem peso total, percurso, quantidade prevista de clientes e o
 estado real do cálculo.
 
 O destaque ciano segue cada polilinha e seus pontos intermediários. Geometrias
-existentes que ainda não foram confirmadas aparecem em laranja. Quando uma
+existentes que ainda não foram validadas aparecem em laranja. Quando uma
 aresta da rota não possui geometria espacial, o resultado matemático continua
 disponível, mas esse trecho não é substituído por uma reta fictícia; ele é
-listado como pendente de calibração. “Confirmado manualmente” não significa
-que o programa comprovou automaticamente a ausência de obstáculos.
+listado como pendente de calibração. Antes da missão, todos os trechos também
+são revalidados no mapa automático com a largura do veículo.
 
 **Limpar rota** remove somente o resultado e seus destaques. **Enquadrar rota**
 ajusta a câmera aos pontos espaciais disponíveis sem alterar modelo, grafo ou
@@ -163,18 +210,35 @@ o resultado anterior e exige novo cálculo.
 ### Missão 3D
 
 **Iniciar missão** fica disponível somente quando há uma rota não trivial e
-todos os trechos usados possuem polilinhas confirmadas manualmente. O botão não
+todos os trechos usados possuem polilinhas confirmadas e válidas no mapa
+automático. A rota da missão também precisa partir do depósito ativo e a vaga
+do carro deve estar validada e vinculada a ele. O botão não
 recalcula Dijkstra ou TSP: ele consome o resultado exibido. Ruas pendentes são
 listadas e precisam ser corrigidas no editor antes da animação.
 
-O controlador independente de Qt avança com o delta de tempo e interpola cada
-par de pontos da polilinha. Ele preserva cruzamentos, curvas, sentidos inversos
-e repetições de arestas. A distância mostrada em quilômetros continua sendo o
-peso oficial do grafo, distribuído proporcionalmente ao avanço geométrico em
-cada aresta. O `QTimer` apenas fornece quadros sem bloquear a interface.
+O controlador independente de Qt integra o movimento com o delta de tempo em
+subpassos de até 1/120 s. Ele parte com velocidade zero, acelera gradualmente,
+antecipa curvas e paradas pela geometria à frente e limita cada deslocamento ao
+próximo ponto de parada. Assim, quadros longos e o modo 4× não ultrapassam um
+cliente. Cruzamentos, sentidos inversos e repetições de arestas continuam
+preservados. A distância mostrada em quilômetros permanece sendo o peso
+oficial do grafo, distribuído proporcionalmente ao avanço geométrico; a nova
+cinemática atua somente nas unidades espaciais da cena.
+
+Mudanças de direção inferiores a 12° são consideradas colineares. Curvas
+suaves, moderadas, fechadas e retornos em U usam, respectivamente, 85%, 62%,
+40% e 22% da velocidade máxima. A frenagem começa antes do vértice pela relação
+`(v² - v_alvo²) / (2 × desaceleração)`. Os valores padrão de aceleração,
+desaceleração confortável e frenagem máxima são derivados da velocidade máxima
+e podem ser substituídos ao construir `ControladorMissao`, sem alterar Dijkstra,
+TSP ou os pesos do grafo.
 
 Durante a execução é possível pausar, continuar, reiniciar, encerrar e escolher
-0,5×, 1×, 2× ou 4×. A edição e a abertura de outro projeto ficam bloqueadas até
+0,5×, 1×, 2× ou 4×. Esses fatores escalam o tempo da simulação, inclusive
+aceleração, frenagem e espera de entrega. Uma linha discreta mostra a velocidade
+atual em unidades espaciais por segundo e a fase do movimento; não é exibido
+km/h porque a escala temporal da cena não representa velocidade rodoviária
+real. A edição e a abertura de outro projeto ficam bloqueadas até
 **Encerrar missão**, inclusive depois de uma conclusão natural. Reiniciar leva
 o carro à origem e limpa as entregas. O painel apresenta o trecho atual,
 distâncias percorrida/restante, clientes atendidos e, ao final, um resumo com
@@ -182,7 +246,10 @@ algoritmo, alvos, ordem TSP e tempo da simulação.
 
 No TSP, uma entrega só ocorre ao alcançar o próximo cliente da ordem oficial;
 passagens incidentais não contam. O carro aguarda aproximadamente um segundo e
-retorna ao depósito ao final. Dijkstra registra somente a chegada ao destino.
+retoma o percurso acelerando a partir do repouso. Ao final, o TSP percorre o
+pequeno trecho entre o depósito lógico e sua vaga e para nela sem teletransporte.
+Dijkstra registra somente a chegada e permanece parado no próprio destino; ao
+encerrar a sessão, o carro volta à vaga do depósito.
 Trechos percorridos ficam cinza, o atual amarelo e os restantes preservam o
 destaque ciano.
 
@@ -222,6 +289,14 @@ alterado pela variável `DELIVERY_ROUTE_CACHE_DIR`. Os GLBs originais nunca são
 modificados. A cena usa `Loader3D`, duas fontes de luz, câmera em perspectiva e
 as escalas próprias dos assets existentes.
 
+O mapa viário possui cache separado em
+`~/.cache/delivery-route/trafegabilidade`. A chave inclui o SHA-256 do conteúdo
+de `cidade.glb`, a versão do reconhecedor, escala, resolução e limite de
+inclinação. Alterar o modelo ou um desses parâmetros invalida o resultado. O
+cache armazena somente metadados derivados e nunca sobrescreve o GLB ou o JSON
+do projeto. Na primeira execução, o indicador da cena mostra as etapas e o
+percentual da análise; execuções seguintes carregam a grade compactada.
+
 O carregamento é adiado até a área 3D estar visível e possuir dimensões. A
 interface diferencia uma árvore QML corretamente carregada de um backend
 gráfico realmente capaz de desenhar Qt Quick 3D, evitando interpretar uma tela
@@ -231,9 +306,8 @@ escura como sucesso.
 
 ### Quatro conceitos que não devem ser confundidos
 
-- **Rua visual:** parte do modelo 3D que parece ser uma via. Como o GLB não
-  traz semântica confiável, ela só se torna trafegável após classificação
-  manual do usuário.
+- **Rua visual:** células da superfície visível reconhecidas automaticamente
+  como via por geometria e material, consultáveis por coordenada `(x, z)`.
 - **Aresta do grafo:** conexão abstrata e não direcionada entre dois vértices.
   É a estrutura consultada pelos algoritmos.
 - **Peso matemático:** distância oficial positiva, em quilômetros, atribuída à
@@ -241,6 +315,9 @@ escura como sucesso.
 - **Traçado espacial:** polilinha 3D ordenada entre os extremos, incluindo as
   curvas marcadas pelo usuário. Ela desenha o destaque e guia o carro, mas não
   altera por conta própria o peso oficial.
+- **Estacionamento inicial:** pose física opcional do carro, associada ao
+  depósito sem mover o vértice lógico. A pegada completa do `carro.glb` é
+  validada sobre a grade automática de rua antes do uso.
 
 `models/grafo.py` mantém vértices, arestas, pesos e invariantes do grafo.
 `algorithms/dijkstra.py` parte da origem, relaxa as arestas com uma fila de
@@ -261,52 +338,61 @@ O cenário de demonstração confirma:
 
 Os botões **Salvar** e **Abrir** usam o formato versionado de
 `models/projeto_cidade.py`. Ele armazena o grafo, posições 3D, polilinhas,
-classificações manuais, fator de conversão e referências dos GLBs. Os binários
-dos modelos não são incorporados ao JSON. Arquivos antigos de
+classificações manuais legadas, fator de conversão, referências dos GLBs e, quando
+disponível, `editor_3d.estacionamento_inicial`. Os binários dos modelos não são
+incorporados ao JSON. Arquivos antigos de
 `models/persistencia.py` continuam aceitos; seus vértices sem posição espacial
 recebem uma disposição inicial aproximada e podem ser reposicionados sobre
-ruas classificadas. O carregamento é transacional: um JSON inválido não
+ruas reconhecidas. As classificações antigas são aceitas e preservadas ao
+salvar, mas têm prioridade inferior ao reconhecimento atual. O carregamento é
+transacional: um JSON inválido não
 substitui o projeto aberto.
+
+Projetos anteriores que possuem depósito, mas não registram
+`estacionamento_inicial`, recebem automaticamente uma vaga próxima assim que o
+mapa viário 3D está pronto. Essa atualização fica marcada como não salva para
+que o arquivo original não seja sobrescrito sem ação explícita do usuário; no
+próximo salvamento, a relação carro–depósito passa a ser persistida normalmente.
+
+O cenário `delivery-route-cidade-completa-corrigida.json` mantém grafo, pesos e
+rede viária do original e acrescenta somente a vaga validada próxima a `D`.
+As capturas OpenGL ficam em `evidencias/estacionamento/`.
 
 ## Roteiro reproduzível de demonstração acadêmica
 
 Este roteiro não depende de coordenadas prontas nem inventa ruas. Cada clique
 deve ser feito sobre uma via realmente visível na cidade carregada:
 
-1. execute `python3 gui_main.py` e aguarde o indicador **CENA 3D PRONTA**;
+1. execute `python3 gui_main.py` e aguarde o mapa viário e a **CENA 3D PRONTA**;
 2. use **Enquadrar** ou **Aérea** para localizar uma faixa contínua de asfalto;
-3. ative **Classificar superfície**, clique nessa faixa e confirme manualmente
-   **Rua trafegável**;
-4. ative **Definir depósito**, clique sobre a via e cadastre o depósito;
-5. ative **Adicionar cliente**, clique em outro ponto da mesma rede e cadastre
+3. ative **Definir depósito**, clique sobre a via reconhecida e cadastre o depósito;
+4. ative **Adicionar cliente**, clique em outro ponto da mesma rede e cadastre
    o primeiro cliente;
-6. repita a etapa anterior para os demais clientes desejados;
-7. crie os cruzamentos necessários com **Adicionar ponto**;
-8. em **Criar rua**, selecione dois marcadores conectados pela via real;
-9. clique ao longo da via para registrar cada curva visível; use **Desfazer**
-   se um ponto sair do asfalto;
-10. pressione **Confirmar**, compare comprimento geométrico e sugestão, informe
+5. repita a etapa anterior para os demais clientes desejados;
+6. crie os cruzamentos necessários com **Adicionar ponto**;
+7. em **Criar rua**, selecione dois marcadores conectados pela via real;
+8. confira a sugestão automática e ajuste os controles somente se necessário;
+9. pressione **Confirmar**, compare comprimento geométrico e sugestão, informe
     o peso oficial em quilômetros e salve a rua;
-11. repita as etapas 8–10 até obter uma rede conectada; confirme que as ruas
-    calibradas estão azuis e que o contador de pendências chegou a zero;
-12. escolha **Dijkstra**, defina origem/destino, calcule e confira distância,
+10. repita as etapas 7–9 até obter uma rede conectada; confirme que as ruas
+    válidas estão azuis e que não há trechos incertos ou inválidos;
+11. escolha **Dijkstra**, defina origem/destino, calcule e confira distância,
     percurso completo, clientes no percurso e destaque na cidade;
-13. limpe a rota, escolha **TSP**, marque clientes e confira separadamente a
+12. limpe a rota, escolha **TSP**, marque clientes e confira separadamente a
     ordem de atendimento e o percurso completo;
-14. inicie a missão, alterne câmera e velocidade, pause e confirme que o carro
+13. inicie a missão, alterne câmera e velocidade, pause e confirme que o carro
     fica imóvel; depois continue até entregas e retorno ao depósito;
-15. encerre a missão, salve o projeto em JSON, feche e abra o arquivo novamente;
-16. recalcule a rota e confirme que pontos, pesos, classificações, curvas e
-    calibrações persistiram.
+14. encerre a missão, salve o projeto em JSON, feche e abra o arquivo novamente;
+15. recalcule a rota e confirme que pontos, pesos e curvas persistiram e foram
+    revalidados contra o mesmo conteúdo de `cidade.glb`.
 
-Se um clique cair em calçada, prédio ou superfície não classificada, o editor
-deve rejeitá-lo. Isso faz parte da demonstração: o sistema não afirma detectar
-ruas ou obstáculos automaticamente.
+Se um clique cair em calçada, prédio, área verde ou região incerta, o editor
+deve rejeitá-lo e explicar a classificação automática encontrada.
 
 ## Limitações conhecidas
 
-- classificação de superfícies e confirmação de ausência de obstáculos são
-  decisões manuais;
+- o reconhecedor é conservador: regiões sem evidência suficiente continuam
+  incertas e precisam de ajuste do traçado, não de classificação manual;
 - o TSP é exato e propositalmente limitado a oito clientes;
 - a missão exige traçados espaciais confirmados para todos os trechos da rota;
 - a renderização 3D depende de driver/backend gráfico compatível com QRhi;
@@ -319,8 +405,9 @@ QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
 python3 -m compileall -q algorithms models ui main.py gui_main.py tests
 ```
 
-A suíte cobre o núcleo matemático, os formatos novo e legado, classificação de
-superfícies, criação/edição/exclusão de vértices e ruas, coordenadas, curvas,
+A suíte cobre o núcleo matemático, os formatos novo e legado, reconhecimento e
+cache de superfícies, largura do veículo, busca viária,
+criação/edição/exclusão de vértices e ruas, coordenadas, curvas,
 pesos, consistência visual, ponte de picking, seleção e execução de
 Dijkstra/TSP, ordem de atendimento, percurso completo, trechos pendentes,
 invalidação, cartões, destaques espaciais, inspeção dos GLBs, câmera e
@@ -334,6 +421,6 @@ materializados; pontos de uma faixa contínua de pavimento foram obtidos por
 `View3D.pick()`; o `carro.glb` avançou sobre ela de `x=-1,379621` até
 `x=-0,667879`, permaneceu imóvel durante a pausa e terminou no ponto exato. A
 câmera de perseguição e o resumo final também foram capturados na cena real.
-Como a distinção semântica do asset não é confiável, a classificação de
-superfícies e a confirmação dos traçados continuam sendo verificações manuais
-obrigatórias.
+Além do teste gráfico, o mapa automático foi conferido no `cidade.glb` real e
+todos os trechos de `delivery-route-cidade-completa.json` passaram pela
+validação contínua com a largura e margem do `carro.glb`.
