@@ -40,6 +40,26 @@ Item {
     property vector3d centroModeloCarro: Qt.vector3d(0, 0, 0)
     property vector3d minimoModeloCarro: Qt.vector3d(0, 0, 0)
     property real rotacaoCarro: 0.0
+    property bool freandoCarro: false
+    property real intensidadeLuzesFreio: freandoCarro ? 1.0 : 0.035
+    Behavior on intensidadeLuzesFreio {
+        NumberAnimation {
+            duration: raiz.freandoCarro ? 90 : 170
+            easing.type: Easing.OutQuad
+        }
+    }
+    // O GLB usa -Z como frente. As quatro caixas abaixo reproduzem os dois
+    // segmentos de cada lanterna encontrados na traseira +Z do asset.
+    readonly property var lanternasFreio: [
+        {x: 10.451571, y: 1.558547, z: 10.266,
+         largura: 0.120365, altura: 0.148728},
+        {x: 10.442188, y: 1.401950, z: 10.309,
+         largura: 0.139131, altura: 0.133748},
+        {x: 12.304506, y: 1.552298, z: 10.266,
+         largura: 0.120365, altura: 0.148728},
+        {x: 12.313889, y: 1.395702, z: 10.309,
+         largura: 0.139131, altura: 0.133748}
+    ]
     // Pequena folga anti-z-fighting; o mínimo Y real do GLB é rebatido abaixo.
     property real alturaCarro: 0.00025
     property bool cidadePronta: cidadeLoader.item !== null
@@ -428,6 +448,41 @@ Item {
                 scale: Qt.vector3d(
                     raiz.escalaCarro, raiz.escalaCarro, raiz.escalaCarro
                 )
+            }
+
+            Repeater3D {
+                model: raiz.lanternasFreio
+                delegate: Model {
+                    id: luzFreio
+                    required property var modelData
+                    objectName: "luz-freio-traseira"
+                    source: "#Cube"
+                    pickable: false
+                    position: Qt.vector3d(
+                        (modelData.x - raiz.centroModeloCarro.x)
+                            * raiz.escalaCarro,
+                        (modelData.y - raiz.minimoModeloCarro.y)
+                            * raiz.escalaCarro,
+                        (modelData.z - raiz.centroModeloCarro.z)
+                            * raiz.escalaCarro
+                    )
+                    // Primitivas Cube medem 100 unidades. A profundidade
+                    // mínima evita z-fighting sem projetar a luz da carroceria.
+                    scale: Qt.vector3d(
+                        modelData.largura * raiz.escalaCarro / 100,
+                        modelData.altura * raiz.escalaCarro / 100,
+                        0.012 * raiz.escalaCarro / 100
+                    )
+                    materials: PrincipledMaterial {
+                        baseColor: "#b9140b"
+                        emissiveFactor: Qt.vector3d(
+                            raiz.intensidadeLuzesFreio,
+                            raiz.intensidadeLuzesFreio * 0.018,
+                            raiz.intensidadeLuzesFreio * 0.006
+                        )
+                        roughness: 0.24
+                    }
+                }
             }
         }
 

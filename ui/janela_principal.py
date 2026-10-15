@@ -870,6 +870,7 @@ class JanelaPrincipal(QMainWindow):
             quadro.orientacao_graus,
             delta_segundos,
             imediato=delta_segundos == 0.0,
+            freando=quadro.freando,
         )
         rota = self.rota_calculada
         if rota is None:

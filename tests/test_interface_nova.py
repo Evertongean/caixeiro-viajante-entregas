@@ -397,6 +397,25 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIn("cameraSeguimentoAlvo", qml)
         self.assertNotIn("raiz.posicaoCarro.z + 0.42", qml)
 
+    def test_ajuste_da_camera_preserva_estado_do_freio(self) -> None:
+        janela = self.criar_janela()
+        visualizacao = janela.visualizacao
+        visualizacao.atualizar_carro((0, 0, 0), 0, freando=True)
+        visualizacao.camera_atras_do_carro()
+        self.assertTrue(visualizacao.freando_carro)
+        visualizacao.configurar_camera_seguidora(0.30, 0.16)
+        self.assertTrue(visualizacao.freando_carro)
+
+    def test_qml_luzes_de_freio_usam_estado_e_geometria_traseira(self) -> None:
+        qml = (Path(__file__).parents[1] / "ui" / "cena_3d.qml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("property bool freandoCarro: false", qml)
+        self.assertIn("Behavior on intensidadeLuzesFreio", qml)
+        self.assertEqual(qml.count('objectName: "luz-freio-traseira"'), 1)
+        self.assertIn("model: raiz.lanternasFreio", qml)
+        self.assertIn("emissiveFactor: Qt.vector3d(", qml)
+
     def test_seletor_prepara_campos_correspondentes_ao_algoritmo(self) -> None:
         janela = self.criar_janela()
         self.assertEqual(janela.campos_algoritmo.currentIndex(), 0)

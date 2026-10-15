@@ -91,6 +91,7 @@ class QuadroMissao:
     velocidade_desejada: float
     velocidade_maxima: float
     fase_movimento: FaseMovimento
+    freando: bool
     distancia_proxima_curva: float | None
     tipo_proxima_curva: TipoCurva | None
     distancia_proxima_parada: float
@@ -484,6 +485,7 @@ class ControladorMissao:
         self.orientacao_graus = self._orientacao_inicial
         self.velocidade_atual = 0.0
         self.velocidade_desejada = 0.0
+        self.freando = False
 
     def iniciar(self) -> QuadroMissao:
         if self.estado is not EstadoMissao.PRONTA:
@@ -492,6 +494,7 @@ class ControladorMissao:
             )
         self.estado = EstadoMissao.EM_MOVIMENTO
         self.fase_movimento = FaseMovimento.ACELERANDO
+        self.freando = False
         return self.quadro()
 
     def pausar(self) -> QuadroMissao:
@@ -526,6 +529,7 @@ class ControladorMissao:
         self.orientacao_graus = self._orientacao_inicial
         self.velocidade_atual = 0.0
         self.velocidade_desejada = 0.0
+        self.freando = False
         return self.quadro()
 
     def _indice_aresta_atual(self) -> int:
@@ -650,6 +654,7 @@ class ControladorMissao:
             velocidade_desejada=self.velocidade_desejada,
             velocidade_maxima=self._velocidade_maxima,
             fase_movimento=self.fase_movimento,
+            freando=self.freando,
             distancia_proxima_curva=distancia_curva,
             tipo_proxima_curva=curva.tipo if curva is not None else None,
             distancia_proxima_parada=distancia_parada,
@@ -713,13 +718,18 @@ class ControladorMissao:
                 self._espera_restante = self.tempo_parada_entrega
                 self.estado = EstadoMissao.EM_ENTREGA
                 self.fase_movimento = FaseMovimento.ENTREGANDO
+                # Mantém o pedal visualmente pressionado durante a parada de
+                # serviço, sem inferir frenagem apenas pela velocidade zero.
+                self.freando = True
             else:
                 self._retomando_apos_entrega = True
                 self.fase_movimento = FaseMovimento.RETOMANDO
+                self.freando = False
             return
 
         self.estado = EstadoMissao.CONCLUIDA
         self.fase_movimento = FaseMovimento.CONCLUIDO
+        self.freando = False
         self._distancia_oficial_anterior = self.rota.distancia_total
         self._geometria_na_aresta = self._comprimentos_arestas[-1]
         eventos.append(EventoMissao(TipoEventoMissao.CONCLUSAO, parada.vertice))
@@ -754,6 +764,7 @@ class ControladorMissao:
             self.velocidade_atual = min(
                 desejada, anterior + self._aceleracao * delta
             )
+            self.freando = False
             self.fase_movimento = (
                 FaseMovimento.RETOMANDO
                 if self._retomando_apos_entrega
@@ -778,9 +789,15 @@ class ControladorMissao:
             self.velocidade_atual = max(
                 desejada, anterior - desaceleracao * delta
             )
+            # O sinal representa desaceleração realmente aplicada, não uma
+            # fase nominal nem simplesmente uma velocidade baixa. O limiar
+            # relativo evita oscilações visuais por resíduos numéricos.
+            limiar_freio = max(EPSILON, self._velocidade_maxima * 1e-5)
+            self.freando = anterior - self.velocidade_atual > limiar_freio
             self.fase_movimento = fase_limitante
         else:
             self.velocidade_atual = desejada
+            self.freando = False
             self.fase_movimento = fase_limitante
 
         if (
@@ -820,6 +837,7 @@ class ControladorMissao:
                     self._espera_restante = 0.0
                     self.estado = EstadoMissao.EM_MOVIMENTO
                     self.fase_movimento = FaseMovimento.RETOMANDO
+                    self.freando = False
                     self._retomando_apos_entrega = True
                 continue
 

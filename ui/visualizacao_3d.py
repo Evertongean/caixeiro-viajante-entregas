@@ -87,6 +87,7 @@ class Visualizacao3D(QQuickWidget):
         self.mapa_trafegabilidade: MapaTrafegabilidade | None = None
         self.posicao_carro = (0.0, 0.0, 0.0)
         self.orientacao_carro = 0.0
+        self.freando_carro = False
         self.escala_cidade = ESCALA_CIDADE_PADRAO
         self.escala_carro = ESCALA_CARRO_PADRAO
         self.inicializado = False
@@ -398,7 +399,11 @@ class Visualizacao3D(QQuickWidget):
         self.camera.preparar_camera_atras_do_carro(self.posicao_carro)
         self.camera_seguidora.reiniciar()
         self.atualizar_carro(
-            self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
+            self.posicao_carro,
+            self.orientacao_carro,
+            0.0,
+            imediato=True,
+            freando=self.freando_carro,
         )
         self._aplicar_camera()
 
@@ -409,11 +414,13 @@ class Visualizacao3D(QQuickWidget):
         delta_segundos: float = 0.0,
         *,
         imediato: bool = False,
+        freando: bool = False,
     ) -> None:
         if len(posicao) != 3:
             raise ValueError("A posição do carro deve possuir três coordenadas.")
         self.posicao_carro = tuple(float(valor) for valor in posicao)
         self.orientacao_carro = float(orientacao_graus)
+        self.freando_carro = bool(freando)
         camera, alvo = self.camera_seguidora.atualizar(
             self.posicao_carro,
             self.orientacao_carro,
@@ -428,13 +435,18 @@ class Visualizacao3D(QQuickWidget):
             "rotacaoCarro",
             self.orientacao_carro + CORRECAO_FRONTAL_CARRO_GRAUS,
         )
+        raiz.setProperty("freandoCarro", self.freando_carro)
         raiz.setProperty("cameraSeguimentoPosicao", QVector3D(*camera))
         raiz.setProperty("cameraSeguimentoAlvo", QVector3D(*alvo))
 
     def configurar_camera_seguidora(self, distancia: float, altura: float) -> None:
         self.camera_seguidora.configurar(distancia=distancia, altura=altura)
         self.atualizar_carro(
-            self.posicao_carro, self.orientacao_carro, 0.0, imediato=True
+            self.posicao_carro,
+            self.orientacao_carro,
+            0.0,
+            imediato=True,
+            freando=self.freando_carro,
         )
 
     def definir_modo_interacao(self, modo: str) -> None:

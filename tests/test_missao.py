@@ -81,6 +81,7 @@ class TestControladorMissao(unittest.TestCase):
         inicial = missao.iniciar()
         self.assertEqual(inicial.velocidade_atual, 0.0)
         self.assertEqual(inicial.fase_movimento, FaseMovimento.ACELERANDO)
+        self.assertFalse(inicial.freando)
         primeira = missao.avancar(0.2)
         segunda = missao.avancar(0.2)
         self.assertGreater(primeira.velocidade_atual, 0.0)
@@ -147,7 +148,9 @@ class TestControladorMissao(unittest.TestCase):
         missao.iniciar()
         frenando = avancar_ate(
             missao,
-            lambda q: q.fase_movimento is FaseMovimento.FREANDO_CURVA,
+            lambda q: (
+                q.fase_movimento is FaseMovimento.FREANDO_CURVA and q.freando
+            ),
         )
         self.assertLess(frenando.posicao[0], 2.0)
         self.assertGreater(frenando.distancia_proxima_curva, 0.0)
@@ -163,6 +166,7 @@ class TestControladorMissao(unittest.TestCase):
             lambda q: q.posicao[2] > 0.5,
         )
         self.assertGreater(depois.velocidade_atual, curva.velocidade_atual)
+        self.assertFalse(depois.freando)
 
     def test_orientacao_muda_pelo_menor_arco_sem_salto(self) -> None:
         rota = criar_rota(
@@ -187,18 +191,28 @@ class TestControladorMissao(unittest.TestCase):
         quadro = avancar_ate(missao, lambda q: q.posicao[0] > 5.0)
         self.assertAlmostEqual(quadro.velocidade_atual, 1.0)
         self.assertEqual(quadro.fase_movimento, FaseMovimento.CRUZEIRO)
+        self.assertFalse(quadro.freando)
 
     def test_dijkstra_freia_para_exatamente_no_destino_sem_ultrapassar(self) -> None:
         rota = criar_rota([("A", "B", 3, ((0, 0, 0), (3, 0, 0)))])
         missao = ControladorMissao(rota, velocidade_base=2.0)
         missao.multiplicador_velocidade = 4.0
         missao.iniciar()
+        frenando = avancar_ate(
+            missao,
+            lambda q: (
+                q.fase_movimento is FaseMovimento.FREANDO_DESTINO
+                and q.freando
+            ),
+        )
+        self.assertLess(frenando.posicao[0], 3.0)
         fim = missao.avancar(10.0)
         self.assertEqual(fim.estado, EstadoMissao.CONCLUIDA)
         self.assertEqual(fim.posicao, (3, 0, 0))
         self.assertEqual(fim.velocidade_atual, 0.0)
         self.assertEqual(fim.distancia_destino_final, 0.0)
         self.assertEqual(fim.fase_movimento, FaseMovimento.CONCLUIDO)
+        self.assertFalse(fim.freando)
         self.assertEqual(
             [evento.tipo for evento in fim.eventos],
             [TipoEventoMissao.CONCLUSAO],
@@ -218,20 +232,31 @@ class TestControladorMissao(unittest.TestCase):
             rota, velocidade_base=1.0, tempo_parada_entrega=1.0
         )
         missao.iniciar()
+        aproximacao = avancar_ate(
+            missao,
+            lambda q: (
+                q.fase_movimento is FaseMovimento.FREANDO_ENTREGA
+                and q.freando
+            ),
+        )
+        self.assertLess(aproximacao.posicao[0], 1.0)
         entrega = avancar_ate(
             missao,
             lambda q: q.estado is EstadoMissao.EM_ENTREGA,
         )
         self.assertEqual(entrega.posicao, (1, 0, 0))
         self.assertEqual(entrega.velocidade_atual, 0.0)
+        self.assertTrue(entrega.freando)
         self.assertIsNone(entrega.distancia_proxima_entrega)
         self.assertEqual(entrega.clientes_atendidos, ("A",))
         self.assertEqual(entrega.eventos[0].tipo, TipoEventoMissao.ENTREGA)
         parado = missao.avancar(0.5)
         self.assertEqual(parado.posicao, (1, 0, 0))
+        self.assertTrue(parado.freando)
         retomada = missao.avancar(0.6)
         self.assertEqual(retomada.clientes_atendidos, ("A",))
         self.assertGreater(retomada.velocidade_atual, 0.0)
+        self.assertFalse(retomada.freando)
         self.assertIn(
             retomada.fase_movimento,
             (FaseMovimento.RETOMANDO, FaseMovimento.EM_CURVA),
@@ -268,6 +293,7 @@ class TestControladorMissao(unittest.TestCase):
             ),
         )
         self.assertNotEqual(retorno.posicao, vaga)
+        self.assertTrue(retorno.freando)
         fim = avancar_ate(
             missao, lambda q: q.estado is EstadoMissao.CONCLUIDA
         )
@@ -297,10 +323,14 @@ class TestControladorMissao(unittest.TestCase):
         missao.iniciar()
         frenando = avancar_ate(
             missao,
-            lambda q: q.fase_movimento is FaseMovimento.FREANDO_CURVA,
+            lambda q: (
+                q.fase_movimento is FaseMovimento.FREANDO_CURVA and q.freando
+            ),
         )
-        missao.pausar()
-        missao.continuar()
+        pausado = missao.pausar()
+        self.assertTrue(pausado.freando)
+        continuado = missao.continuar()
+        self.assertTrue(continuado.freando)
         self.assertAlmostEqual(
             missao.quadro().velocidade_atual, frenando.velocidade_atual
         )
@@ -308,6 +338,9 @@ class TestControladorMissao(unittest.TestCase):
         self.assertEqual(reinicio.posicao, (0, 0, 0))
         self.assertEqual(reinicio.velocidade_atual, 0.0)
         self.assertEqual(reinicio.fase_movimento, FaseMovimento.ACELERANDO)
+        self.assertFalse(reinicio.freando)
+        encerrado = missao.encerrar()
+        self.assertFalse(encerrado.freando)
 
     def test_multiplicadores_representam_tempo_simulado(self) -> None:
         rota = criar_rota([("A", "B", 10, ((0, 0, 0), (10, 0, 0)))])
