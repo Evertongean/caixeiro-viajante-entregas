@@ -178,9 +178,23 @@ em um segmento para inserir na ordem correta, selecione um controle para
 desfazer, refazer, remover, confirmar e cancelar. Cancelar restaura integralmente
 o traçado original.
 
-Ao confirmar uma rua, o diálogo mostra o comprimento geométrico, o fator
-configurável em km/unidade e a sugestão resultante. O peso oficial continua
-sendo um campo separado, validado pelo grafo e usado por Dijkstra e TSP.
+Ao confirmar uma rua, o diálogo mostra a conexão, a distância sugerida em
+quilômetros e somente um campo editável: **Distância oficial (km)**. A sugestão
+é o comprimento de todos os segmentos da polilinha, inclusive os pontos
+intermediários, multiplicado pela escala geral do cenário. **Usar sugestão**
+repõe esse valor no campo sem salvá-lo imediatamente, permitindo uma revisão
+manual antes da confirmação.
+
+A conversão não é configurada a cada rua. Use **Escala de distância**, na seção
+**Editar cidade**, para definir uma única relação em km por unidade do cenário
+e indicar se ela já foi conferida. Enquanto não estiver validada, a confirmação
+identifica a sugestão como estimativa. Alterar a escala afeta apenas sugestões
+futuras: não recalcula nem sobrescreve as distâncias oficiais existentes.
+
+A distância oficial é gravada diretamente como peso da aresta, sem uma segunda
+multiplicação. Dijkstra, TSP e os relatórios usam esse peso; a geometria 3D
+permanece independente e continua determinando desenho e animação. Ao editar
+uma rua, o peso atual é preservado até o usuário confirmar outro valor.
 
 ### Calcular rota
 

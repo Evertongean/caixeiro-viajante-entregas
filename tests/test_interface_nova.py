@@ -606,9 +606,8 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIsNotNone(janela.rota_calculada)
         with patch("ui.janela_principal.DialogoRua") as dialogo:
             dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
-            dialogo.return_value.dados.return_value = (
-                janela.grafo.obter_distancia("D", "X"),
-                janela.projeto.fator_km_por_unidade,
+            dialogo.return_value.dados.return_value = janela.grafo.obter_distancia(
+                "D", "X"
             )
             janela._confirmar_operacao()
         self.assertEqual(janela.projeto.ruas[chave].pontos_intermediarios, [alterado])
@@ -622,6 +621,49 @@ class TestNovaInterface(unittest.TestCase):
             janela.projeto.geometria_rua("X", "D").pontos_intermediarios,
             [alterado],
         )
+
+    def test_alterar_distancia_oficial_invalida_rota_calculada(self) -> None:
+        janela = self.criar_janela()
+        janela.projeto.posicoes = {
+            vertice.identificador: (vertice.x, 0.0, vertice.y)
+            for vertice in janela.grafo.listar_vertices()
+        }
+        janela.botao_calcular.click()
+        self.assertIsNotNone(janela.rota_calculada)
+        peso_anterior = janela.grafo.obter_distancia("D", "X")
+        janela.editor.iniciar_rua("D", "X", editar=True)
+        with patch("ui.janela_principal.DialogoRua") as dialogo:
+            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialogo.return_value.dados.return_value = peso_anterior + 0.5
+            janela._confirmar_operacao()
+        self.assertEqual(
+            janela.grafo.obter_distancia("D", "X"), peso_anterior + 0.5
+        )
+        self.assertIsNone(janela.rota_calculada)
+        self.assertIn("recalcular", janela.cartao_status.valor.text())
+
+    def test_configurar_escala_geral_preserva_pesos_existentes(self) -> None:
+        janela = self.criar_janela()
+        pesos_antes = {
+            frozenset(
+                (aresta.origem.identificador, aresta.destino.identificador)
+            ): aresta.peso
+            for aresta in janela.grafo.listar_arestas()
+        }
+        with patch("ui.janela_principal.DialogoEscalaCenario") as dialogo:
+            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            dialogo.return_value.dados.return_value = (0.125, True)
+            janela._configurar_escala_cenario()
+        pesos_depois = {
+            frozenset(
+                (aresta.origem.identificador, aresta.destino.identificador)
+            ): aresta.peso
+            for aresta in janela.grafo.listar_arestas()
+        }
+        self.assertEqual(pesos_depois, pesos_antes)
+        self.assertEqual(janela.projeto.fator_km_por_unidade, 0.125)
+        self.assertTrue(janela.projeto.escala_km_validada)
+        self.assertTrue(janela.projeto_modificado)
 
     def test_limpar_rota_remove_resultados_e_destaques(self) -> None:
         janela = self.criar_janela()

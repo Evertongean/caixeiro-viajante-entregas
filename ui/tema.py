@@ -21,6 +21,16 @@ QMainWindow, QWidget#raizAplicacao {
     font-family: "Inter", "Segoe UI", sans-serif;
     font-size: 13px;
 }
+QDialog {
+    background: #0C1829;
+    color: #F4F8FF;
+    font-family: "Inter", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+QDialog QLabel {
+    color: #DDEAFF;
+    background: transparent;
+}
 QFrame#cabecalho {
     background: #0A1626;
     border-bottom: 1px solid #1C314B;
@@ -152,7 +162,7 @@ QPushButton#botaoMissao:disabled {
     border-color: #70522A;
     color: #A99578;
 }
-QComboBox, QListWidget, QDoubleSpinBox {
+QComboBox, QListWidget, QDoubleSpinBox, QLineEdit {
     background: #0A1727;
     color: #EAF3FF;
     border: 1px solid #29445F;
@@ -187,7 +197,8 @@ QLabel#depositoTsp, QLabel#quantidadeClientes, QLabel#resultadoRota {
     border-radius: 7px;
     padding: 6px 8px;
 }
-QComboBox:disabled, QListWidget:disabled, QDoubleSpinBox:disabled {
+QComboBox:disabled, QListWidget:disabled,
+QDoubleSpinBox:disabled, QLineEdit:disabled {
     color: #687B91;
     background: #101B29;
 }

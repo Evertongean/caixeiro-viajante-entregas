@@ -66,7 +66,12 @@ from models.rota import (
 
 from .assets_3d import ConversorBalsam
 from .animacao_missao import AnimacaoMissao
-from .dialogos_editor import DialogoRua, DialogoSuperficie, DialogoVertice
+from .dialogos_editor import (
+    DialogoEscalaCenario,
+    DialogoRua,
+    DialogoSuperficie,
+    DialogoVertice,
+)
 from .editor_cidade import EditorCidade3D, ModoEditor
 from .apresentacao_rota import (
     marcadores_rota_qml,
@@ -334,6 +339,11 @@ class JanelaPrincipal(QMainWindow):
             self.grupo_ferramentas.addButton(botao)
             botao.setEnabled(False)
             layout.addWidget(botao)
+        self.botao_configurar_escala = QPushButton("Escala de distância")
+        self.botao_configurar_escala.setToolTip(
+            "Configura uma única conversão da cidade 3D para quilômetros."
+        )
+        layout.addWidget(self.botao_configurar_escala)
         self.botao_classificar.setCheckable(True)
         self.grupo_ferramentas.addButton(self.botao_classificar)
 
@@ -425,6 +435,9 @@ class JanelaPrincipal(QMainWindow):
             self._ativar_definicao_deposito
         )
         self.botao_criar_rua.clicked.connect(self._ativar_criacao_rua)
+        self.botao_configurar_escala.clicked.connect(
+            self._configurar_escala_cenario
+        )
         self.botao_classificar.clicked.connect(self._ativar_classificacao)
         self.botao_confirmar_edicao.clicked.connect(self._confirmar_operacao)
         self.botao_desfazer_edicao.clicked.connect(self._desfazer_operacao)
@@ -725,6 +738,7 @@ class JanelaPrincipal(QMainWindow):
             controle.setEnabled(not bloqueado)
         self.botao_abrir_projeto.setEnabled(not bloqueado)
         self.botao_novo_projeto.setEnabled(not bloqueado)
+        self.botao_configurar_escala.setEnabled(not bloqueado)
         if bloqueado:
             self._modo_navegar()
             for botao in self.botoes_edicao:
@@ -2043,7 +2057,6 @@ class JanelaPrincipal(QMainWindow):
         operacao = self.editor.operacao_rua
         if operacao.origem is None or operacao.destino is None:
             return
-        comprimento = self.editor.comprimento_operacao_rua()
         problemas = self.editor.validar_operacao_rua()
         if problemas:
             self._mostrar_erro("\n".join(problemas))
@@ -2073,18 +2086,17 @@ class JanelaPrincipal(QMainWindow):
         dialogo = DialogoRua(
             operacao.origem,
             operacao.destino,
-            comprimento,
-            self.projeto.fator_km_por_unidade,
+            self.editor.distancia_sugerida_operacao_rua(),
             self,
             peso_atual=peso_atual,
+            escala_validada=self.projeto.escala_km_validada,
         )
         if dialogo.exec() != QDialog.DialogCode.Accepted:
             return
-        peso, fator = dialogo.dados()
+        peso = dialogo.dados()
         try:
             self.editor.confirmar_rua(
                 peso,
-                fator,
                 validada_automaticamente=(
                     validacao_automatica.valido
                     if validacao_automatica is not None
@@ -2100,6 +2112,27 @@ class JanelaPrincipal(QMainWindow):
         self._definir_instrucao(
             "Traçado validado automaticamente e confirmado. A rota anterior foi "
             "invalidada para impedir o uso de geometria em cache."
+        )
+
+    def _configurar_escala_cenario(self) -> None:
+        dialogo = DialogoEscalaCenario(
+            self.projeto.fator_km_por_unidade,
+            self.projeto.escala_km_validada,
+            self,
+        )
+        if dialogo.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            escala, validada = dialogo.dados()
+            self.editor.configurar_escala_cenario(escala, validada=validada)
+        except (TypeError, ValueError) as erro:
+            self._mostrar_erro(str(erro))
+            return
+        self._definir_projeto_modificado(True)
+        estado = "validada" if validada else "mantida como estimativa"
+        self._definir_instrucao(
+            f"Escala geral atualizada para {escala:.9g} km/unidade e {estado}. "
+            "As distâncias oficiais existentes foram preservadas."
         )
 
     def _desfazer_operacao(self) -> None:
