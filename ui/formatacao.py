@@ -27,13 +27,8 @@ def formatar_distancia_km(valor: float) -> str:
     return f"{formatar_numero_br(valor)} km"
 
 
-def formatar_escala_km(valor: float) -> str:
-    return f"{formatar_numero_br(valor)} km/unidade"
-
-
 __all__ = [
     "arredondar_para_exibicao",
     "formatar_distancia_km",
-    "formatar_escala_km",
     "formatar_numero_br",
 ]

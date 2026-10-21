@@ -90,14 +90,11 @@ class TestEditorCidade3D(unittest.TestCase):
         self.assertEqual(len(self.editor.segmentos_ruas_qml()), 2)
         self.assertEqual(self.editor.modo, ModoEditor.NAVEGAR)
 
-    def test_sugestao_converte_toda_polilinha_pela_escala_geral(self) -> None:
+    def test_comprimento_geometrico_considera_toda_a_polilinha(self) -> None:
         self._criar_rede_minima()
-        self.editor.configurar_escala_cenario(0.125, validada=True)
         self.editor.iniciar_rua("D", "C1")
         self.editor.adicionar_ponto_intermediario((1.0, 0.2, 6.0))
         self.assertAlmostEqual(self.editor.comprimento_operacao_rua(), 7.0)
-        self.assertAlmostEqual(self.editor.distancia_sugerida_operacao_rua(), 0.875)
-        self.assertTrue(self.projeto.escala_km_validada)
 
     def test_desfaz_extremos_e_curvas_sem_alterar_o_grafo(self) -> None:
         self._criar_rede_minima()
@@ -115,8 +112,8 @@ class TestEditorCidade3D(unittest.TestCase):
         self.editor.confirmar_rua(5)
         self.editor.iniciar_rua("D", "C1", editar=True)
         self.editor.adicionar_ponto_intermediario((3, 0.2, 4))
-        self.editor.confirmar_rua(2.25)
-        self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 2.25)
+        self.editor.confirmar_rua(2.8)
+        self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 2.8)
         self.assertEqual(
             self.projeto.geometria_rua("D", "C1").pontos_intermediarios,
             [(3.0, 0.2, 4.0)],
@@ -137,13 +134,6 @@ class TestEditorCidade3D(unittest.TestCase):
             self.projeto.geometria_rua("D", "C1").pontos_intermediarios,
             [(2.0, 0.2, 4.0)],
         )
-
-    def test_mudar_escala_nao_recalcula_pesos_existentes(self) -> None:
-        self._criar_rede_minima()
-        self.editor.iniciar_rua("D", "C1")
-        self.editor.confirmar_rua(4.25)
-        self.editor.configurar_escala_cenario(0.01, validada=True)
-        self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 4.25)
 
     def test_criar_rua_calibra_aresta_preexistente_sem_duplicar(self) -> None:
         self._criar_rede_minima()
@@ -218,15 +208,15 @@ class TestEditorCidade3D(unittest.TestCase):
     def test_dijkstra_e_tsp_operam_no_mesmo_grafo_editado(self) -> None:
         self._criar_rede_minima()
         self.editor.iniciar_rua("D", "C1")
-        self.editor.confirmar_rua(4.5)
+        self.editor.confirmar_rua(1.5)
 
         menor = dijkstra(self.projeto.grafo, "D", "C1")
         rota = caixeiro_viajante(self.projeto.grafo)
         self.assertEqual(menor.caminho, ["D", "C1"])
-        self.assertEqual(menor.distancia_total, 4.5)
+        self.assertEqual(menor.distancia_total, 1.5)
         self.assertTrue(rota.encontrada)
         self.assertEqual(rota.ordem_entregas, ["D", "C1", "D"])
-        self.assertEqual(rota.distancia_total, 9.0)
+        self.assertEqual(rota.distancia_total, 3.0)
 
     def _criar_rua_editavel(self) -> None:
         self._criar_rede_minima()

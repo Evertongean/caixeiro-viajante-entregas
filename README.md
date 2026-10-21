@@ -178,32 +178,25 @@ em um segmento para inserir na ordem correta, selecione um controle para
 desfazer, refazer, remover, confirmar e cancelar. Cancelar restaura integralmente
 o traçado original.
 
-Ao confirmar uma rua, o diálogo mostra a conexão, a distância sugerida em
-quilômetros e somente um campo editável: **Distância oficial (km)**. A sugestão
-é o comprimento de todos os segmentos da polilinha, inclusive os pontos
-intermediários, multiplicado pela escala geral do cenário. **Usar sugestão**
-repõe esse valor no campo sem salvá-lo imediatamente, permitindo uma revisão
-manual antes da confirmação.
+Ao confirmar uma rua, o diálogo mostra somente a conexão e o campo
+**Distância da rua (km)**. Informe manualmente um valor positivo com uma casa
+decimal e vírgula brasileira, como `1,5` ou `2,8`, e use **Salvar**. Não há
+escala geral, fator de conversão ou distância sugerida no fluxo de edição.
 
-A conversão não é configurada a cada rua. Use **Escala de distância**, na seção
-**Editar cidade**, para definir uma única relação em km por unidade do cenário
-e indicar se ela já foi conferida. Enquanto não estiver validada, a confirmação
-identifica a sugestão como estimativa. Alterar a escala afeta apenas sugestões
-futuras: não recalcula nem sobrescreve as distâncias oficiais existentes.
+O valor informado é gravado diretamente como peso da aresta, sem conversão ou
+multiplicação. Dijkstra, TSP e os relatórios usam exatamente esse peso. O
+comprimento da polilinha 3D permanece independente e continua disponível para
+desenho, validação espacial e animação do veículo.
 
-A distância oficial é gravada diretamente como peso da aresta, sem uma segunda
-multiplicação. Dijkstra, TSP e os relatórios usam esse peso; a geometria 3D
-permanece independente e continua determinando desenho e animação. Ao editar
-uma rua, o peso atual é preservado até o usuário confirmar outro valor.
+As distâncias da interface são apresentadas com uma casa decimal e vírgula
+brasileira, como `7,5 km`. Ao editar uma rua antiga, o campo apresenta esse
+formato simplificado, mas o peso original com maior precisão continua intacto
+se o usuário não modificar o valor. Se houver alteração explícita, o novo
+valor de uma casa decimal passa a ser o peso oficial.
 
-Todas as distâncias e escalas da interface são apresentadas com uma casa
-decimal e vírgula brasileira, como `7,5 km` e `10,0 km/unidade`. Esse formato
-não arredonda os pesos já armazenados: ao editar somente a geometria, um peso
-legado mais preciso continua intacto. Um novo valor digitado ou escolhido por
-**Usar sugestão** passa a ser o valor oficial de uma casa decimal exibido no
-campo. Sugestões positivas menores que `0,05 km` aparecem como `0,0 km` e não
-podem ser salvas sem que o usuário informe uma distância positiva ou ajuste a
-escala geral.
+Projetos antigos continuam aceitando e preservando os campos legados de escala
+durante leitura e salvamento. Esses dados existem apenas para compatibilidade:
+não são exigidos nem utilizados para calcular o peso de ruas novas ou editadas.
 
 ### Calcular rota
 

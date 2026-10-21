@@ -15,7 +15,7 @@ try:
     from PySide6.QtCore import QPoint, QTimer, Qt
     from PySide6.QtQuickWidgets import QQuickWidget
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton
 
     from models.grafo import Grafo, TipoVertice, Vertice, criar_cenario_exemplo
     from models.missao import EstadoMissao, FaseMovimento, TipoEventoMissao
@@ -647,28 +647,11 @@ class TestNovaInterface(unittest.TestCase):
         self.assertIsNone(janela.rota_calculada)
         self.assertIn("recalcular", janela.cartao_status.valor.text())
 
-    def test_configurar_escala_geral_preserva_pesos_existentes(self) -> None:
+    def test_painel_de_edicao_nao_exibe_configuracao_de_escala(self) -> None:
         janela = self.criar_janela()
-        pesos_antes = {
-            frozenset(
-                (aresta.origem.identificador, aresta.destino.identificador)
-            ): aresta.peso
-            for aresta in janela.grafo.listar_arestas()
-        }
-        with patch("ui.janela_principal.DialogoEscalaCenario") as dialogo:
-            dialogo.return_value.exec.return_value = QDialog.DialogCode.Accepted
-            dialogo.return_value.dados.return_value = (0.125, True)
-            janela._configurar_escala_cenario()
-        pesos_depois = {
-            frozenset(
-                (aresta.origem.identificador, aresta.destino.identificador)
-            ): aresta.peso
-            for aresta in janela.grafo.listar_arestas()
-        }
-        self.assertEqual(pesos_depois, pesos_antes)
-        self.assertEqual(janela.projeto.fator_km_por_unidade, 0.125)
-        self.assertTrue(janela.projeto.escala_km_validada)
-        self.assertTrue(janela.projeto_modificado)
+        self.assertFalse(hasattr(janela, "botao_configurar_escala"))
+        textos = [botao.text() for botao in janela.findChildren(QPushButton)]
+        self.assertNotIn("Escala de distância", textos)
 
     def test_limpar_rota_remove_resultados_e_destaques(self) -> None:
         janela = self.criar_janela()

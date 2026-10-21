@@ -7,7 +7,6 @@ import unittest
 from ui.formatacao import (
     arredondar_para_exibicao,
     formatar_distancia_km,
-    formatar_escala_km,
     formatar_numero_br,
 )
 
@@ -27,7 +26,6 @@ class TestFormatacaoDistancias(unittest.TestCase):
 
     def test_unidades_sao_apenas_apresentacao(self) -> None:
         self.assertEqual(formatar_distancia_km(7.468894270), "7,5 km")
-        self.assertEqual(formatar_escala_km(10.0), "10,0 km/unidade")
 
     def test_arredondamento_explicito_nao_inventa_minimo(self) -> None:
         self.assertEqual(arredondar_para_exibicao(0.04), 0.0)

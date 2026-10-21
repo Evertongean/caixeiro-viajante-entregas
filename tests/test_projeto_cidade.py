@@ -95,6 +95,16 @@ class TestProjetoCidade(unittest.TestCase):
         self.assertFalse(carregado.escala_km_validada)
         self.assertEqual(carregado.grafo.obter_distancia("D", "C"), peso_original)
 
+    def test_campos_legados_de_escala_nao_sao_obrigatorios(self) -> None:
+        dados = projeto_para_dados(self.criar_projeto())
+        del dados["editor_3d"]["fator_km_por_unidade"]
+        del dados["editor_3d"]["escala_km_validada"]
+        peso_original = dados["grafo"]["arestas"][0]["peso"]
+        carregado = projeto_de_dados(dados)
+        self.assertEqual(carregado.fator_km_por_unidade, 1.0)
+        self.assertFalse(carregado.escala_km_validada)
+        self.assertEqual(carregado.grafo.obter_distancia("D", "C"), peso_original)
+
     def test_round_trip_nao_arredonda_peso_antigo_preciso(self) -> None:
         projeto = self.criar_projeto()
         projeto.grafo.atualizar_peso_aresta("D", "C", 2.345678901)

@@ -501,25 +501,6 @@ class EditorCidade3D:
             )
         )
 
-    def distancia_sugerida_operacao_rua(self) -> float:
-        """Converte toda a polilinha atual usando a escala geral do cenário."""
-        return self.comprimento_operacao_rua() * self.projeto.fator_km_por_unidade
-
-    def configurar_escala_cenario(
-        self, km_por_unidade: float, *, validada: bool
-    ) -> None:
-        if (
-            isinstance(km_por_unidade, bool)
-            or not isinstance(km_por_unidade, (int, float))
-            or not isfinite(km_por_unidade)
-            or km_por_unidade <= 0
-        ):
-            raise ValueError("A escala deve ser um número positivo e finito.")
-        if not isinstance(validada, bool):
-            raise TypeError("O estado de validação da escala deve ser booleano.")
-        self.projeto.fator_km_por_unidade = float(km_por_unidade)
-        self.projeto.escala_km_validada = validada
-
     def confirmar_rua(
         self,
         peso: float,
