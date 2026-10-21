@@ -95,6 +95,17 @@ class TestProjetoCidade(unittest.TestCase):
         self.assertFalse(carregado.escala_km_validada)
         self.assertEqual(carregado.grafo.obter_distancia("D", "C"), peso_original)
 
+    def test_round_trip_nao_arredonda_peso_antigo_preciso(self) -> None:
+        projeto = self.criar_projeto()
+        projeto.grafo.atualizar_peso_aresta("D", "C", 2.345678901)
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = Path(pasta) / "preciso.json"
+            salvar_projeto_cidade(projeto, caminho)
+            carregado = carregar_projeto_cidade(caminho)
+        self.assertEqual(
+            carregado.grafo.obter_distancia("D", "C"), 2.345678901
+        )
+
     def test_normaliza_rua_legada_duplicada_nos_dois_sentidos(self) -> None:
         dados = projeto_para_dados(self.criar_projeto())
         rua = dados["editor_3d"]["ruas"][0]

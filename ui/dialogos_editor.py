@@ -21,6 +21,10 @@ from PySide6.QtWidgets import (
 
 from models.grafo import TipoVertice, Vertice
 from models.projeto_cidade import ClassificacaoSuperficie
+from .formatacao import (
+    arredondar_para_exibicao,
+    formatar_distancia_km,
+)
 
 
 class DialogoVertice(QDialog):
@@ -165,7 +169,7 @@ class DialogoRua(QDialog):
         self._distancia_sugerida = float(distancia_sugerida_km)
         if not isfinite(self._distancia_sugerida) or self._distancia_sugerida <= 0:
             raise ValueError("A distância sugerida deve ser positiva e finita.")
-        self.sugestao = QLabel(self._texto_distancia(self._distancia_sugerida))
+        self.sugestao = QLabel(formatar_distancia_km(self._distancia_sugerida))
         formulario.addRow("Distância sugerida", self.sugestao)
         if not escala_validada:
             estimativa = QLabel(
@@ -178,16 +182,27 @@ class DialogoRua(QDialog):
         self.peso.setLocale(
             QLocale(QLocale.Language.Portuguese, QLocale.Country.Brazil)
         )
-        self.peso.setDecimals(9)
-        self.peso.setRange(0.000000001, 1_000_000_000_000)
+        self.peso.setDecimals(1)
+        self.peso.setRange(0.0, 1_000_000_000_000)
         self.peso.setSuffix(" km")
         self.peso.setKeyboardTracking(False)
         self.peso.setCorrectionMode(
             QAbstractSpinBox.CorrectionMode.CorrectToPreviousValue
         )
-        self.peso.setValue(
-            peso_atual if peso_atual is not None else self._distancia_sugerida
+        self._peso_original = float(peso_atual) if peso_atual is not None else None
+        if self._peso_original is not None and (
+            not isfinite(self._peso_original) or self._peso_original <= 0
+        ):
+            raise ValueError("A distância oficial atual deve ser positiva e finita.")
+        self._peso_modificado = False
+        valor_inicial = (
+            self._peso_original
+            if self._peso_original is not None
+            else self._distancia_sugerida
         )
+        self.peso.setValue(arredondar_para_exibicao(valor_inicial))
+        self.peso.valueChanged.connect(self._marcar_peso_modificado)
+        self.peso.lineEdit().textChanged.connect(self._marcar_peso_modificado)
         formulario.addRow("Distância oficial (km)", self.peso)
         layout.addLayout(formulario)
         self.erro_distancia = QLabel()
@@ -211,30 +226,34 @@ class DialogoRua(QDialog):
         botoes.rejected.connect(self.reject)
         layout.addWidget(botoes)
 
-    @staticmethod
-    def _texto_distancia(valor: float) -> str:
-        locale = QLocale(QLocale.Language.Portuguese, QLocale.Country.Brazil)
-        return f"{locale.toString(valor, 'f', 6)} km"
+    def _marcar_peso_modificado(self, *_args) -> None:
+        self._peso_modificado = True
 
     def usar_sugestao(self) -> None:
-        self.peso.setValue(self._distancia_sugerida)
+        self._peso_modificado = True
+        self.peso.setValue(arredondar_para_exibicao(self._distancia_sugerida))
         self.erro_distancia.clear()
 
     def _validar(self) -> None:
-        if not self.peso.hasAcceptableInput():
-            self.erro_distancia.setText("Informe uma distância numérica válida.")
-            self.peso.setFocus()
-            return
-        self.peso.interpretText()
-        valor = self.peso.value()
-        if not isfinite(valor) or valor <= 0:
-            self.erro_distancia.setText("A distância deve ser maior que zero.")
+        try:
+            self.dados()
+        except ValueError:
+            if self.peso.hasAcceptableInput() and self.peso.value() <= 0:
+                mensagem = (
+                    "A distância deve ser positiva. Informe ao menos 0,1 km ou "
+                    "ajuste a escala geral do cenário."
+                )
+            else:
+                mensagem = "Informe uma distância numérica válida."
+            self.erro_distancia.setText(mensagem)
             self.peso.setFocus()
             return
         self.erro_distancia.clear()
         self.accept()
 
     def dados(self) -> float:
+        if self._peso_original is not None and not self._peso_modificado:
+            return self._peso_original
         if not self.peso.hasAcceptableInput():
             raise ValueError("A distância oficial deve ser um número válido.")
         self.peso.interpretText()
@@ -269,29 +288,58 @@ class DialogoEscalaCenario(QDialog):
         self.escala.setLocale(
             QLocale(QLocale.Language.Portuguese, QLocale.Country.Brazil)
         )
-        self.escala.setDecimals(9)
-        self.escala.setRange(0.000000001, 1_000_000_000)
+        self.escala.setDecimals(1)
+        self.escala.setRange(0.0, 1_000_000_000)
         self.escala.setSuffix(" km/unidade")
-        self.escala.setValue(fator_atual)
+        self._escala_original = float(fator_atual)
+        if not isfinite(self._escala_original) or self._escala_original <= 0:
+            raise ValueError("A escala geral deve ser positiva e finita.")
+        self._escala_modificada = False
+        self.escala.setValue(arredondar_para_exibicao(self._escala_original))
+        self.escala.valueChanged.connect(self._marcar_escala_modificada)
+        self.escala.lineEdit().textChanged.connect(self._marcar_escala_modificada)
         formulario.addRow("Escala geral", self.escala)
         layout.addLayout(formulario)
         self.validada = QCheckBox("Escala conferida para este cenário")
         self.validada.setChecked(escala_validada)
         layout.addWidget(self.validada)
+        self.erro_escala = QLabel()
+        self.erro_escala.setStyleSheet("color: #FCA5A5;")
+        self.erro_escala.setWordWrap(True)
+        layout.addWidget(self.erro_escala)
         botoes = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
-        botoes.button(QDialogButtonBox.StandardButton.Save).setText("Salvar")
+        self.botao_salvar = botoes.button(QDialogButtonBox.StandardButton.Save)
+        self.botao_salvar.setText("Salvar")
         botoes.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancelar")
-        botoes.accepted.connect(self.accept)
+        botoes.accepted.connect(self._validar)
         botoes.rejected.connect(self.reject)
         layout.addWidget(botoes)
 
+    def _marcar_escala_modificada(self, *_args) -> None:
+        self._escala_modificada = True
+
+    def _validar(self) -> None:
+        try:
+            self.dados()
+        except ValueError as erro:
+            self.erro_escala.setText(str(erro))
+            self.escala.setFocus()
+            return
+        self.erro_escala.clear()
+        self.accept()
+
     def dados(self) -> tuple[float, bool]:
+        if not self._escala_modificada:
+            return self._escala_original, self.validada.isChecked()
+        if not self.escala.hasAcceptableInput():
+            raise ValueError("Informe uma escala numérica válida.")
+        self.escala.interpretText()
         valor = self.escala.value()
         if not isfinite(valor) or valor <= 0:
-            raise ValueError("A escala geral deve ser positiva e finita.")
+            raise ValueError("A escala geral deve ser maior que 0,0 km/unidade.")
         return valor, self.validada.isChecked()
 
 

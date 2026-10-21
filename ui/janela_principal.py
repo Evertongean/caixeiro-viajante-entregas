@@ -73,6 +73,11 @@ from .dialogos_editor import (
     DialogoVertice,
 )
 from .editor_cidade import EditorCidade3D, ModoEditor
+from .formatacao import (
+    formatar_distancia_km,
+    formatar_escala_km,
+    formatar_numero_br,
+)
 from .apresentacao_rota import (
     marcadores_rota_qml,
     pontos_para_enquadrar,
@@ -910,8 +915,9 @@ class JanelaPrincipal(QMainWindow):
             )
             self._chave_visual_missao = chave
         self.cartao_distancia.definir(
-            f"{rota.distancia_total:g} km · {quadro.distancia_percorrida:.2f} perc. · "
-            f"{quadro.distancia_restante:.2f} rest."
+            f"{formatar_distancia_km(rota.distancia_total)} · "
+            f"{formatar_distancia_km(quadro.distancia_percorrida)} perc. · "
+            f"{formatar_distancia_km(quadro.distancia_restante)} rest."
         )
         self.cartao_percurso.definir(
             f"{' → '.join(rota.percurso_completo)} · atual: "
@@ -967,8 +973,9 @@ class JanelaPrincipal(QMainWindow):
         estado = "concluída" if resumo.concluida else "interrompida"
         return (
             f"Missão {estado} · algoritmo: {algoritmo} · origem: {resumo.origem} · "
-            f"{alvo} · distância: {resumo.distancia_percorrida:.2f}/"
-            f"{resumo.distancia_total:g} km · entregas: {resumo.clientes_atendidos}/"
+            f"{alvo} · distância: {formatar_numero_br(resumo.distancia_percorrida)}/"
+            f"{formatar_distancia_km(resumo.distancia_total)} · "
+            f"entregas: {resumo.clientes_atendidos}/"
             f"{resumo.total_clientes}{ordem} · tempo da simulação: "
             f"{resumo.tempo_decorrido:.1f} s."
         )
@@ -1081,7 +1088,7 @@ class JanelaPrincipal(QMainWindow):
     def _apresentar_rota(self, rota: RotaCalculada) -> None:
         self.rota_calculada = rota
         percurso = " → ".join(rota.percurso_completo)
-        self.cartao_distancia.definir(f"{rota.distancia_total:g} km")
+        self.cartao_distancia.definir(formatar_distancia_km(rota.distancia_total))
         self.cartao_percurso.definir(percurso)
         quantidade = len(rota.clientes_selecionados)
         self.cartao_clientes.definir(f"0 / {quantidade}")
@@ -1634,13 +1641,16 @@ class JanelaPrincipal(QMainWindow):
             estado = "não salvas" if operacao.modificada else "sem alterações"
             snap = f" · snap: {operacao.snap_origem}" if operacao.snap_origem else ""
             cabecalho = (
-                f"{operacao.origem} ↔ {operacao.destino} · peso: {peso:g} km · "
+                f"{operacao.origem} ↔ {operacao.destino} · "
+                f"peso: {formatar_distancia_km(peso)} · "
                 if peso is not None
                 else f"{operacao.origem} ↔ {operacao.destino} · peso: novo · "
             )
             self.detalhes_rua.setText(
                 cabecalho
-                + f"comprimento: {self.editor.comprimento_operacao_rua():.4f} · "
+                + "comprimento 3D: "
+                + formatar_numero_br(self.editor.comprimento_operacao_rua())
+                + " unidades · "
                 f"intermediários: {len(operacao.pontos_intermediarios)} · "
                 f"alterações {estado}{snap}"
             )
@@ -1673,8 +1683,9 @@ class JanelaPrincipal(QMainWindow):
         else:
             calibracao = "inconclusiva — " + validacao[2]
         self.detalhes_rua.setText(
-            f"{origem} ↔ {destino} · peso: {peso:g} km · comprimento: "
-            f"{comprimento:.4f} · intermediários: {intermediarios} · "
+            f"{origem} ↔ {destino} · peso: {formatar_distancia_km(peso)} · "
+            f"comprimento 3D: {formatar_numero_br(comprimento)} unidades · "
+            f"intermediários: {intermediarios} · "
             f"calibração {calibracao} · sem alterações"
         )
 
@@ -1839,7 +1850,8 @@ class JanelaPrincipal(QMainWindow):
                 "no mesmo local para alternar"
             )
         self._definir_instrucao(
-            f"Rua selecionada: {origem} ↔ {destino} · peso oficial {peso:g} km"
+            f"Rua selecionada: {origem} ↔ {destino} · "
+            f"peso oficial {formatar_distancia_km(peso)}"
             f"{complemento}."
         )
         self._sincronizar_cena()
@@ -2131,7 +2143,7 @@ class JanelaPrincipal(QMainWindow):
         self._definir_projeto_modificado(True)
         estado = "validada" if validada else "mantida como estimativa"
         self._definir_instrucao(
-            f"Escala geral atualizada para {escala:.9g} km/unidade e {estado}. "
+            f"Escala geral atualizada para {formatar_escala_km(escala)} e {estado}. "
             "As distâncias oficiais existentes foram preservadas."
         )
 

@@ -196,6 +196,15 @@ multiplicação. Dijkstra, TSP e os relatórios usam esse peso; a geometria 3D
 permanece independente e continua determinando desenho e animação. Ao editar
 uma rua, o peso atual é preservado até o usuário confirmar outro valor.
 
+Todas as distâncias e escalas da interface são apresentadas com uma casa
+decimal e vírgula brasileira, como `7,5 km` e `10,0 km/unidade`. Esse formato
+não arredonda os pesos já armazenados: ao editar somente a geometria, um peso
+legado mais preciso continua intacto. Um novo valor digitado ou escolhido por
+**Usar sugestão** passa a ser o valor oficial de uma casa decimal exibido no
+campo. Sugestões positivas menores que `0,05 km` aparecem como `0,0 km` e não
+podem ser salvas sem que o usuário informe uma distância positiva ou ajuste a
+escala geral.
+
 ### Calcular rota
 
 Em **Dijkstra — menor caminho**, escolha qualquer origem e destino do grafo e

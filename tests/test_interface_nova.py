@@ -373,6 +373,10 @@ class TestNovaInterface(unittest.TestCase):
         janela._atualizar_quadro_missao(quadro_movido, 1.0)
         self.assertNotEqual(janela.visualizacao.posicao_carro, vaga)
         self.assertIn("unid./s", janela.indicador_velocidade.text())
+        texto_distancia = janela.cartao_distancia.valor.text()
+        self.assertIn("6,0 km", texto_distancia)
+        self.assertRegex(texto_distancia, r"\d+,\d km perc\.")
+        self.assertRegex(texto_distancia, r"\d+,\d km rest\.")
         janela._reiniciar_missao()
         janela.animacao_missao.timer.stop()
         self.assertEqual(janela.controlador_missao.quadro().posicao, vaga)
@@ -386,6 +390,7 @@ class TestNovaInterface(unittest.TestCase):
         janela._missao_concluida(janela.controlador_missao.resumo())
         self.assertEqual(janela.visualizacao.posicao_carro, (3.0, 0.0, 0.0))
         self.assertIn("Missão concluída", janela.indicador_velocidade.text())
+        self.assertIn("distância: 6,0/6,0 km", janela.resumo_missao.text())
         janela._encerrar_missao()
         self.assertEqual(janela.visualizacao.posicao_carro, vaga)
 
@@ -453,7 +458,7 @@ class TestNovaInterface(unittest.TestCase):
             janela.rota_calculada.percurso_completo,
             ("D", "X", "A", "B"),
         )
-        self.assertEqual(janela.cartao_distancia.valor.text(), "6 km")
+        self.assertEqual(janela.cartao_distancia.valor.text(), "6,0 km")
         self.assertEqual(janela.cartao_percurso.valor.text(), "D → X → A → B")
         self.assertEqual(
             janela.cartao_clientes.valor.text(), "0 / 2"
@@ -467,7 +472,7 @@ class TestNovaInterface(unittest.TestCase):
         janela = self.criar_janela()
         janela.seletor_algoritmo.setCurrentIndex(1)
         janela.botao_calcular.click()
-        self.assertEqual(janela.cartao_distancia.valor.text(), "15 km")
+        self.assertEqual(janela.cartao_distancia.valor.text(), "15,0 km")
         self.assertIn("D → A → B → C → D", janela.resultado_ordem.text())
         self.assertIn(
             "D → X → A → B → C → D", janela.resultado_percurso.text()
