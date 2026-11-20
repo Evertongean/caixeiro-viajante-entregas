@@ -153,6 +153,92 @@ class TestEtiquetasERota3D(unittest.TestCase):
         self.assertFalse(self._item("etiqueta-rota:B").isVisible())
         self.assertTrue(self._item("etiqueta-rota:C").isVisible())
 
+    def test_interpolacao_visual_de_posicao_e_menor_arco_angular(self) -> None:
+        self.raiz.definirEstadoCarro(0, 0, 0, 350, 0, True, False)
+        self.raiz.definirEstadoCarro(10, 2, -4, 10, 0.04, False, False)
+        self.raiz.avancarApresentacao(0.02)
+
+        posicao = self.raiz.property("posicaoCarroVisual")
+        self.assertAlmostEqual(posicao.x(), 5.0)
+        self.assertAlmostEqual(posicao.y(), 1.0)
+        self.assertAlmostEqual(posicao.z(), -2.0)
+        self.assertAlmostEqual(
+            self.raiz.property("orientacaoCarroVisual") % 360.0, 0.0
+        )
+
+    def test_interpolacao_independe_da_distribuicao_dos_quadros(self) -> None:
+        resultados = []
+        for deltas in ((0.01, 0.01, 0.01, 0.01), (0.016, 0.008, 0.016)):
+            self.raiz.definirEstadoCarro(0, 0, 0, 0, 0, True, False)
+            self.raiz.definirEstadoCarro(4, 0, 0, 90, 0.04, False, False)
+            for delta in deltas:
+                self.raiz.avancarApresentacao(delta)
+            posicao = self.raiz.property("posicaoCarroVisual")
+            resultados.append(
+                (posicao.x(), self.raiz.property("orientacaoCarroVisual"))
+            )
+        self.assertEqual(resultados[0], resultados[1])
+        self.assertEqual(resultados[0], (4.0, 90.0))
+
+    def test_interpolacao_preserva_esquina_da_polilinha(self) -> None:
+        self.raiz.definirEstadoCarro(0, 0, 0, 0, 0, True, False)
+        self.raiz.setProperty(
+            "caminhoEstadoCarro",
+            [
+                QVector3D(0, 0, 0),
+                QVector3D(1, 0, 0),
+                QVector3D(1, 0, 1),
+            ],
+        )
+        self.raiz.definirEstadoCarro(1, 0, 1, 0, 0.04, False, False)
+        self.raiz.avancarApresentacao(0.02)
+
+        posicao = self.raiz.property("posicaoCarroVisual")
+        self.assertAlmostEqual(posicao.x(), 1.0)
+        self.assertAlmostEqual(posicao.z(), 0.0)
+
+    def test_quadro_visual_atrasado_nao_extrapola(self) -> None:
+        self.raiz.definirEstadoCarro(0, 0, 0, 0, 0, True, False)
+        self.raiz.definirEstadoCarro(1, 0, 0, 30, 1.0, False, False)
+        self.assertEqual(self.raiz.property("duracaoInterpolacaoCarro"), 0.05)
+        self.raiz.avancarApresentacao(0.5)
+
+        posicao = self.raiz.property("posicaoCarroVisual")
+        self.assertEqual(posicao.x(), 1.0)
+        self.assertEqual(self.raiz.property("orientacaoCarroVisual"), 30.0)
+        self.assertFalse(self.raiz.property("apresentacaoCarroAtiva"))
+
+    def test_pausa_continuacao_e_encerramento_nao_deixam_animacao(self) -> None:
+        self.raiz.iniciarApresentacaoCarro()
+        self.raiz.definirEstadoCarro(0, 0, 0, 0, 0, True, False)
+        self.raiz.definirEstadoCarro(10, 0, 0, 0, 0.04, False, False)
+        self.raiz.avancarApresentacao(0.02)
+        antes = self.raiz.property("posicaoCarroVisual").x()
+        self.raiz.pausarApresentacaoCarro()
+        self.raiz.avancarApresentacao(0.02)
+        self.assertEqual(self.raiz.property("posicaoCarroVisual").x(), antes)
+
+        self.raiz.continuarApresentacaoCarro()
+        self.raiz.definirEstadoCarro(10, 0, 0, 0, 0.04, False, False)
+        self.raiz.avancarApresentacao(0.04)
+        self.assertEqual(self.raiz.property("posicaoCarroVisual").x(), 10.0)
+        self.raiz.encerrarApresentacaoCarro()
+        self.assertFalse(self.raiz.property("animacaoCarroExecutando"))
+        self.assertFalse(self.raiz.property("apresentacaoCarroAtiva"))
+
+    def test_camera_seguidora_usa_a_pose_visual_interpolada(self) -> None:
+        self.raiz.definirEstadoCarro(0, 0, 0, 0, 0, True, False)
+        self.raiz.definirEstadoCarro(0, 0, 1, 0, 0.04, False, False)
+        self.raiz.avancarApresentacao(0.02)
+        self.raiz.atualizarCameraVisual(0, True)
+
+        carro = self.raiz.property("posicaoCarroVisual")
+        camera = self.raiz.property("cameraSeguimentoPosicao")
+        alvo = self.raiz.property("cameraSeguimentoAlvo")
+        self.assertAlmostEqual(carro.z(), 0.5)
+        self.assertAlmostEqual(camera.z(), carro.z() - 0.34)
+        self.assertAlmostEqual(alvo.z(), carro.z() + 0.07)
+
     def test_redimensionamento_reprojeta_no_novo_viewport(self) -> None:
         self.raiz.setProperty("marcadores", [self._marcador("A")])
         self._processar()

@@ -184,6 +184,23 @@ class TestControladorMissao(unittest.TestCase):
         self.assertLess(depois.orientacao_graus, 90.0)
         self.assertGreater(depois.orientacao_graus, -1e-6)
 
+    def test_quadro_informa_esquinas_cruzadas_para_interpolacao_visual(self) -> None:
+        rota = criar_rota(
+            [("A", "B", 11, ((0, 0, 0), (1, 0, 0), (1, 0, 10)))]
+        )
+        missao = ControladorMissao(
+            rota,
+            velocidade_base=2.0,
+            aceleracao=4.0,
+            desaceleracao_conforto=2.0,
+            frenagem_maxima=4.0,
+        )
+        missao.iniciar()
+        quadro = missao.avancar(1.0)
+        self.assertIn((1, 0, 0), quadro.pontos_interpolacao)
+        self.assertEqual(quadro.pontos_interpolacao[0], (0.0, 0.0, 0.0))
+        self.assertEqual(quadro.pontos_interpolacao[-1], quadro.posicao)
+
     def test_reta_nao_freia_antes_da_zona_do_destino(self) -> None:
         rota = criar_rota([("A", "B", 10, ((0, 0, 0), (10, 0, 0)))])
         missao = ControladorMissao(rota, velocidade_base=1.0)

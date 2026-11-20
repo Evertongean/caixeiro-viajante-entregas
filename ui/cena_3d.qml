@@ -1,6 +1,6 @@
 pragma ComponentBehavior: Bound
 
-import QtQuick 2.15
+import QtQuick 6.5
 import QtQuick3D 6.5
 
 Item {
@@ -11,6 +11,7 @@ Item {
                             string material, bool encontrado)
     signal pontoArraste(real x, real y, real z, string objeto,
                         string material, bool encontrado)
+    signal quadroApresentado(real deltaSegundos)
     property real pickX: -1
     property real pickY: -1
     property real arrastePickX: -1
@@ -36,10 +37,32 @@ Item {
     property string cameraModo: "livre"
     property vector3d cameraSeguimentoPosicao: Qt.vector3d(0, 0.24, 0.42)
     property vector3d cameraSeguimentoAlvo: Qt.vector3d(0, 0, 0)
+    property real cameraSeguimentoDistancia: 0.34
+    property real cameraSeguimentoAltura: 0.18
+    property real cameraSeguimentoAntecipacao: 0.07
+    property real cameraSeguimentoSuavidade: 7.0
+    property bool cameraSeguimentoInicializada: false
     property vector3d posicaoCarro: Qt.vector3d(0, 0, 0)
+    property vector3d posicaoCarroVisual: Qt.vector3d(0, 0, 0)
+    property vector3d posicaoCarroOrigem: Qt.vector3d(0, 0, 0)
+    property vector3d posicaoCarroAlvo: Qt.vector3d(0, 0, 0)
+    property var caminhoEstadoCarro: []
+    property var caminhoInterpolacaoCarro: []
+    property real comprimentoInterpolacaoCarro: 0.0
+    property real orientacaoCarro: 0.0
+    property real orientacaoCarroVisual: 0.0
+    property real orientacaoCarroOrigem: 0.0
+    property real orientacaoCarroAlvo: 0.0
+    property real correcaoFrontalCarro: 180.0
+    property real duracaoInterpolacaoCarro: 1.0 / 30.0
+    property real tempoInterpolacaoCarro: 0.0
+    property bool apresentacaoCarroAtiva: false
+    property bool apresentacaoCarroPausada: false
+    property bool animacaoCarroExecutando: false
     property vector3d centroModeloCarro: Qt.vector3d(0, 0, 0)
     property vector3d minimoModeloCarro: Qt.vector3d(0, 0, 0)
-    property real rotacaoCarro: 0.0
+    property real rotacaoCarro:
+        orientacaoCarroVisual + correcaoFrontalCarro
     property bool freandoCarro: false
     property real intensidadeLuzesFreio: freandoCarro ? 1.0 : 0.035
     Behavior on intensidadeLuzesFreio {
@@ -86,6 +109,194 @@ Item {
     property point ultimoCliqueRua: Qt.point(-1000, -1000)
     property bool marcadorTemporarioVisivel: false
     property vector3d marcadorTemporarioPosicao: Qt.vector3d(0, 0, 0)
+
+    function limitar(valor, minimo, maximo) {
+        return Math.max(minimo, Math.min(maximo, valor))
+    }
+
+    function interpolarPosicao(inicio, fim, fator) {
+        const t = limitar(fator, 0.0, 1.0)
+        return Qt.vector3d(
+            inicio.x + (fim.x - inicio.x) * t,
+            inicio.y + (fim.y - inicio.y) * t,
+            inicio.z + (fim.z - inicio.z) * t
+        )
+    }
+
+    function distanciaPontos(inicio, fim) {
+        const dx = fim.x - inicio.x
+        const dy = fim.y - inicio.y
+        const dz = fim.z - inicio.z
+        return Math.sqrt(dx * dx + dy * dy + dz * dz)
+    }
+
+    function prepararCaminhoInterpolacao() {
+        let caminho = [posicaoCarroVisual]
+        // O primeiro item recebido é a posição oficial anterior. A origem
+        // visual pode estar alguns milissegundos atrás dela, então começamos
+        // na pose realmente desenhada e preservamos apenas as esquinas
+        // seguintes da polilinha oficial.
+        for (let indice = 1; indice < caminhoEstadoCarro.length; ++indice) {
+            const ponto = caminhoEstadoCarro[indice]
+            if (distanciaPontos(caminho[caminho.length - 1], ponto) > 1e-10)
+                caminho.push(ponto)
+        }
+        if (distanciaPontos(caminho[caminho.length - 1], posicaoCarroAlvo) > 1e-10)
+            caminho.push(posicaoCarroAlvo)
+        caminhoInterpolacaoCarro = caminho
+        comprimentoInterpolacaoCarro = 0.0
+        for (let indice = 0; indice + 1 < caminho.length; ++indice) {
+            comprimentoInterpolacaoCarro += distanciaPontos(
+                caminho[indice], caminho[indice + 1]
+            )
+        }
+    }
+
+    function posicaoNoCaminho(fator) {
+        if (caminhoInterpolacaoCarro.length < 2
+                || comprimentoInterpolacaoCarro <= 1e-10)
+            return posicaoCarroAlvo
+        let restante = limitar(fator, 0.0, 1.0)
+            * comprimentoInterpolacaoCarro
+        for (let indice = 0;
+             indice + 1 < caminhoInterpolacaoCarro.length; ++indice) {
+            const inicio = caminhoInterpolacaoCarro[indice]
+            const fim = caminhoInterpolacaoCarro[indice + 1]
+            const comprimento = distanciaPontos(inicio, fim)
+            if (restante <= comprimento || indice + 2 === caminhoInterpolacaoCarro.length)
+                return interpolarPosicao(inicio, fim, restante / comprimento)
+            restante -= comprimento
+        }
+        return posicaoCarroAlvo
+    }
+
+    function diferencaAngular(inicio, fim) {
+        return ((((fim - inicio) % 360.0) + 540.0) % 360.0) - 180.0
+    }
+
+    function interpolarOrientacao(inicio, fim, fator) {
+        return inicio + diferencaAngular(inicio, fim)
+            * limitar(fator, 0.0, 1.0)
+    }
+
+    function atualizarCameraVisual(deltaSegundos, imediato) {
+        const angulo = orientacaoCarroVisual * Math.PI / 180.0
+        const frenteX = Math.sin(angulo)
+        const frenteZ = Math.cos(angulo)
+        const desejada = Qt.vector3d(
+            posicaoCarroVisual.x - frenteX * cameraSeguimentoDistancia,
+            posicaoCarroVisual.y + cameraSeguimentoAltura,
+            posicaoCarroVisual.z - frenteZ * cameraSeguimentoDistancia
+        )
+        const alvo = Qt.vector3d(
+            posicaoCarroVisual.x + frenteX * cameraSeguimentoAntecipacao,
+            posicaoCarroVisual.y + cameraSeguimentoAltura * 0.18,
+            posicaoCarroVisual.z + frenteZ * cameraSeguimentoAntecipacao
+        )
+        if (imediato || !cameraSeguimentoInicializada) {
+            cameraSeguimentoPosicao = desejada
+            cameraSeguimentoAlvo = alvo
+            cameraSeguimentoInicializada = true
+            return
+        }
+        const delta = limitar(deltaSegundos, 0.0, 0.05)
+        const fator = 1.0 - Math.exp(-cameraSeguimentoSuavidade * delta)
+        cameraSeguimentoPosicao = interpolarPosicao(
+            cameraSeguimentoPosicao, desejada, fator
+        )
+        cameraSeguimentoAlvo = interpolarPosicao(
+            cameraSeguimentoAlvo, alvo, fator
+        )
+    }
+
+    function definirEstadoCarro(x, y, z, orientacao, duracao,
+                                imediato, freando) {
+        posicaoCarro = Qt.vector3d(x, y, z)
+        orientacaoCarro = orientacao
+        freandoCarro = freando
+        if (imediato) {
+            posicaoCarroOrigem = posicaoCarro
+            posicaoCarroAlvo = posicaoCarro
+            posicaoCarroVisual = posicaoCarro
+            caminhoInterpolacaoCarro = [posicaoCarro]
+            comprimentoInterpolacaoCarro = 0.0
+            orientacaoCarroOrigem = orientacao
+            orientacaoCarroAlvo = orientacao
+            orientacaoCarroVisual = orientacao
+            tempoInterpolacaoCarro = 0.0
+            apresentacaoCarroAtiva = false
+            atualizarCameraVisual(0.0, true)
+            return
+        }
+        posicaoCarroOrigem = posicaoCarroVisual
+        posicaoCarroAlvo = posicaoCarro
+        prepararCaminhoInterpolacao()
+        orientacaoCarroOrigem = orientacaoCarroVisual
+        orientacaoCarroAlvo = orientacao
+        duracaoInterpolacaoCarro = limitar(duracao, 1.0 / 120.0, 0.05)
+        tempoInterpolacaoCarro = 0.0
+        apresentacaoCarroAtiva = true
+    }
+
+    function avancarApresentacao(deltaSegundos) {
+        if (apresentacaoCarroPausada)
+            return
+        const delta = limitar(deltaSegundos, 0.0, 0.05)
+        if (apresentacaoCarroAtiva) {
+            tempoInterpolacaoCarro += delta
+            const fator = limitar(
+                tempoInterpolacaoCarro / duracaoInterpolacaoCarro, 0.0, 1.0
+            )
+            posicaoCarroVisual = posicaoNoCaminho(fator)
+            orientacaoCarroVisual = interpolarOrientacao(
+                orientacaoCarroOrigem, orientacaoCarroAlvo, fator
+            )
+            if (fator >= 1.0)
+                apresentacaoCarroAtiva = false
+        }
+        atualizarCameraVisual(delta, false)
+    }
+
+    function iniciarApresentacaoCarro() {
+        apresentacaoCarroPausada = false
+        animacaoCarroExecutando = true
+    }
+
+    function pausarApresentacaoCarro() {
+        apresentacaoCarroPausada = true
+        animacaoCarroExecutando = false
+        apresentacaoCarroAtiva = false
+        posicaoCarroOrigem = posicaoCarroVisual
+        posicaoCarroAlvo = posicaoCarroVisual
+        orientacaoCarroOrigem = orientacaoCarroVisual
+        orientacaoCarroAlvo = orientacaoCarroVisual
+    }
+
+    function continuarApresentacaoCarro() {
+        apresentacaoCarroPausada = false
+        animacaoCarroExecutando = true
+    }
+
+    function concluirApresentacaoCarro() {
+        animacaoCarroExecutando = false
+    }
+
+    function encerrarApresentacaoCarro() {
+        animacaoCarroExecutando = false
+        apresentacaoCarroAtiva = false
+        apresentacaoCarroPausada = false
+    }
+
+    FrameAnimation {
+        id: atualizacaoVisualCarro
+        running: (raiz.animacaoCarroExecutando
+                  || raiz.apresentacaoCarroAtiva)
+                 && !raiz.apresentacaoCarroPausada
+        onTriggered: {
+            raiz.avancarApresentacao(frameTime)
+            raiz.quadroApresentado(frameTime)
+        }
+    }
 
     function tornarSelecionavel(no) {
         if (!no)
@@ -160,15 +371,18 @@ Item {
             const medida = distanciaSegmento2D(x, y, a.x, a.y, b.x, b.y)
             if (medida.distancia > tolerancia)
                 continue
-            const identificador = item.aresta
-            const anterior = melhores[identificador]
-            if (!anterior || medida.distancia < anterior.distancia) {
-                melhores[identificador] = {
-                    id: identificador,
-                    distancia: medida.distancia,
-                    x: item.ax + (item.bx - item.ax) * medida.t,
-                    y: item.ay + (item.by - item.ay) * medida.t,
-                    z: item.az + (item.bz - item.az) * medida.t
+            const arestas = item.arestas || [item.aresta]
+            for (let aresta = 0; aresta < arestas.length; ++aresta) {
+                const identificador = arestas[aresta]
+                const anterior = melhores[identificador]
+                if (!anterior || medida.distancia < anterior.distancia) {
+                    melhores[identificador] = {
+                        id: identificador,
+                        distancia: medida.distancia,
+                        x: item.ax + (item.bx - item.ax) * medida.t,
+                        y: item.ay + (item.by - item.ay) * medida.t,
+                        z: item.az + (item.bz - item.az) * medida.t
+                    }
                 }
             }
         }
@@ -345,6 +559,15 @@ Item {
             || cameraDistancia <= distanciaRotulosCruzamentos
     }
 
+    function textoMarcadorCidade(item) {
+        // Cenários acadêmicos numerados podem ter muitos clientes próximos;
+        // o identificador oficial basta e evita rótulos longos sobrepostos.
+        if (/^\d+$/.test(String(item.id)))
+            return String(item.id)
+        return item.tipo === "cruzamento"
+            ? item.id : item.id + " · " + item.nome
+    }
+
     function rotuloRotaVisivel(item) {
         return cameraModo !== "atras_do_carro"
             || item.texto.startsWith("PRÓXIMA")
@@ -430,9 +653,9 @@ Item {
             id: transformacaoCarro
             objectName: "transformacaoCarro"
             position: Qt.vector3d(
-                raiz.posicaoCarro.x,
-                raiz.posicaoCarro.y + raiz.alturaCarro,
-                raiz.posicaoCarro.z
+                raiz.posicaoCarroVisual.x,
+                raiz.posicaoCarroVisual.y + raiz.alturaCarro,
+                raiz.posicaoCarroVisual.z
             )
             eulerRotation: Qt.vector3d(0, raiz.rotacaoCarro, 0)
 
@@ -684,10 +907,7 @@ Item {
                 color: "#F4F8FF"
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
-                text: etiquetaMarcador.modelData.tipo === "cruzamento"
-                    ? etiquetaMarcador.modelData.id
-                    : etiquetaMarcador.modelData.id + " · "
-                        + etiquetaMarcador.modelData.nome
+                text: raiz.textoMarcadorCidade(etiquetaMarcador.modelData)
             }
         }
     }

@@ -15,7 +15,14 @@ try:
     from PySide6.QtCore import QPoint, QTimer, Qt
     from PySide6.QtQuickWidgets import QQuickWidget
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton
+    from PySide6.QtWidgets import (
+        QApplication,
+        QDialog,
+        QMessageBox,
+        QPlainTextEdit,
+        QProgressBar,
+        QPushButton,
+    )
 
     from models.grafo import Grafo, TipoVertice, Vertice, criar_cenario_exemplo
     from models.missao import EstadoMissao, FaseMovimento, TipoEventoMissao
@@ -119,6 +126,103 @@ class TestNovaInterface(unittest.TestCase):
             janela.cartao_status.valor.text(),
             "Cidade pronta. Adicione clientes para começar.",
         )
+
+    def test_painel_da_missao_nao_revalida_toda_a_rota(self) -> None:
+        janela = self.criar_janela()
+        janela._sessao_missao_ativa = True
+        with patch.object(
+            janela,
+            "_rota_apta_para_missao",
+            side_effect=AssertionError("validação espacial repetida"),
+        ):
+            janela._atualizar_controles_missao()
+        self.assertFalse(janela.botao_iniciar.isEnabled())
+
+    def test_layout_de_rota_recalcula_altura_e_nao_cria_rolagem_horizontal(self) -> None:
+        janela = self.criar_janela()
+        janela.resize(960, 640)
+        self.aplicacao.processEvents()
+        altura_dijkstra = janela.campos_algoritmo.sizeHint().height()
+        origem_y = janela.origem.mapTo(janela, QPoint(0, 0)).y()
+        seletor_fim = (
+            janela.seletor_algoritmo.mapTo(janela, QPoint(0, 0)).y()
+            + janela.seletor_algoritmo.height()
+        )
+        self.assertLess(origem_y - seletor_fim, 80)
+
+        janela.seletor_algoritmo.setCurrentIndex(
+            janela.seletor_algoritmo.findData("tsp")
+        )
+        self.aplicacao.processEvents()
+        altura_tsp = janela.campos_algoritmo.sizeHint().height()
+        self.assertGreater(altura_tsp, altura_dijkstra)
+
+        janela.seletor_metodo_tsp.setCurrentIndex(
+            janela.seletor_metodo_tsp.findData("forca_bruta_demonstracao")
+        )
+        janela.progresso_melhor_ordem.setPlainText(
+            " → ".join(str(indice) for indice in range(1, 19))
+        )
+        self.aplicacao.processEvents()
+        self.assertTrue(janela.painel_progresso_forca.isVisible())
+        self.assertFalse(janela.botao_calcular.isVisible())
+        self.assertIsInstance(janela.progresso_melhor_ordem, QPlainTextEdit)
+        self.assertIsInstance(janela.barra_progresso_forca, QProgressBar)
+        self.assertEqual(
+            janela.rolagem_controles.horizontalScrollBar().maximum(), 0
+        )
+
+        janela.seletor_algoritmo.setCurrentIndex(
+            janela.seletor_algoritmo.findData("dijkstra")
+        )
+        self.aplicacao.processEvents()
+        self.assertFalse(janela.painel_progresso_forca.isVisible())
+        self.assertTrue(janela.botao_calcular.isVisible())
+        self.assertEqual(
+            janela.campos_algoritmo.sizeHint().height(), altura_dijkstra
+        )
+
+    def test_forca_bruta_real_mantem_qt_responsivo_e_interrompe(self) -> None:
+        janela = self.criar_janela_limpa()
+        self.assertTrue(janela.carregar_grafo_academico_18(confirmar=False))
+        janela.seletor_algoritmo.setCurrentIndex(
+            janela.seletor_algoritmo.findData("tsp")
+        )
+        janela.seletor_metodo_tsp.setCurrentIndex(
+            janela.seletor_metodo_tsp.findData(
+                "forca_bruta_demonstracao"
+            )
+        )
+        janela.duracao_maxima_forca.setCurrentIndex(0)
+        respondeu: list[bool] = []
+        QTimer.singleShot(50, lambda: respondeu.append(True))
+
+        janela.botao_iniciar_forca.click()
+        self.assertTrue(janela._calculando_rota)
+        self.assertIsNotNone(janela._processo_forca_bruta)
+        for _ in range(60):
+            progresso = janela._progresso_forca_bruta
+            if progresso is not None and progresso.permutacoes_avaliadas > 0:
+                break
+            QTest.qWait(50)
+        self.assertTrue(respondeu)
+        self.assertIsNotNone(janela._progresso_forca_bruta)
+        self.assertGreater(
+            janela._progresso_forca_bruta.permutacoes_avaliadas, 0
+        )
+
+        janela.botao_interromper_forca.click()
+        for _ in range(100):
+            if not janela._calculando_rota:
+                break
+            QTest.qWait(50)
+        self.assertFalse(janela._calculando_rota)
+        self.assertIsNotNone(janela.rota_calculada)
+        self.assertFalse(janela.rota_calculada.busca_tsp_completa)
+        self.assertIn("Busca interrompida", janela.estado_forca_bruta.text())
+        apta, motivo = janela._rota_apta_para_missao()
+        self.assertFalse(apta)
+        self.assertIn("solução parcial", motivo)
 
     def test_adiciona_primeiro_e_multiplos_clientes_no_cenario_limpo(self) -> None:
         janela = self.criar_janela_limpa()
@@ -686,7 +790,13 @@ class TestNovaInterface(unittest.TestCase):
 
     def test_layout_responde_a_todos_os_tamanhos_alvo(self) -> None:
         janela = self.criar_janela()
-        tamanhos = ((1920, 1080), (1366, 768), (1280, 720), (960, 640))
+        tamanhos = (
+            (1920, 1080),
+            (1600, 900),
+            (1366, 768),
+            (1280, 720),
+            (960, 640),
+        )
         for largura, altura in tamanhos:
             with self.subTest(tamanho=(largura, altura)):
                 janela.resize(largura, altura)
@@ -702,6 +812,9 @@ class TestNovaInterface(unittest.TestCase):
                 self.assertGreaterEqual(janela.divisor.sizes()[1], 280)
                 self.assertGreater(
                     janela.rolagem_controles.verticalScrollBar().maximum(), 0
+                )
+                self.assertEqual(
+                    janela.rolagem_controles.horizontalScrollBar().maximum(), 0
                 )
                 esperadas = 2 if largura < 1180 else 4
                 self.assertEqual(janela._colunas_cartoes, esperadas)
