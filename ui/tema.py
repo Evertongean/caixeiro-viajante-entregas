@@ -21,6 +21,16 @@ QMainWindow, QWidget#raizAplicacao {
     font-family: "Inter", "Segoe UI", sans-serif;
     font-size: 13px;
 }
+QDialog {
+    background: #0C1829;
+    color: #F4F8FF;
+    font-family: "Inter", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+QDialog QLabel {
+    color: #DDEAFF;
+    background: transparent;
+}
 QFrame#cabecalho {
     background: #0A1626;
     border-bottom: 1px solid #1C314B;
@@ -39,6 +49,12 @@ QLabel#tituloAplicacao {
 }
 QLabel#subtituloAplicacao, QLabel#textoSecundario, QLabel#notaFutura {
     color: #8498B2;
+}
+QLabel#subtituloPainel {
+    color: #78B9FF;
+    font-size: 11px;
+    font-weight: 800;
+    padding-top: 3px;
 }
 QLabel#instrucaoEditor {
     color: #C5D8EE;
@@ -152,7 +168,7 @@ QPushButton#botaoMissao:disabled {
     border-color: #70522A;
     color: #A99578;
 }
-QComboBox, QListWidget, QDoubleSpinBox {
+QComboBox, QListWidget, QDoubleSpinBox, QLineEdit, QPlainTextEdit {
     background: #0A1727;
     color: #EAF3FF;
     border: 1px solid #29445F;
@@ -160,6 +176,24 @@ QComboBox, QListWidget, QDoubleSpinBox {
     min-height: 34px;
     padding: 0 9px;
     selection-background-color: #2388FF;
+}
+QPlainTextEdit {
+    padding: 7px 8px;
+}
+QProgressBar {
+    min-height: 18px;
+    max-height: 18px;
+    color: #EAF3FF;
+    background: #0A1727;
+    border: 1px solid #29445F;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+}
+QProgressBar::chunk {
+    background: #2388FF;
+    border-radius: 5px;
 }
 QCheckBox {
     color: #C5D8EE;
@@ -187,12 +221,16 @@ QLabel#depositoTsp, QLabel#quantidadeClientes, QLabel#resultadoRota {
     border-radius: 7px;
     padding: 6px 8px;
 }
-QComboBox:disabled, QListWidget:disabled, QDoubleSpinBox:disabled {
+QComboBox:disabled, QListWidget:disabled,
+QDoubleSpinBox:disabled, QLineEdit:disabled, QPlainTextEdit:disabled {
     color: #687B91;
     background: #101B29;
 }
 QComboBox::drop-down { border: none; width: 28px; }
-QScrollArea { border: none; background: transparent; }
+QScrollArea, QWidget#conteudoControles {
+    border: none;
+    background: transparent;
+}
 QScrollBar:vertical {
     background: #0A1625;
     width: 8px;

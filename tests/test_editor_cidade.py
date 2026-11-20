@@ -82,13 +82,19 @@ class TestEditorCidade3D(unittest.TestCase):
         self.assertEqual(self.editor.selecionar_extremo_rua("C1"), "destino")
         self.editor.adicionar_ponto_intermediario((1.0, 0.2, 6.0))
         self.assertAlmostEqual(self.editor.comprimento_operacao_rua(), 7.0)
-        self.editor.confirmar_rua(3.75, 0.5)
+        self.editor.confirmar_rua(3.75)
 
         self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 3.75)
         geometria = self.projeto.geometria_rua("D", "C1")
         self.assertEqual(geometria.pontos_intermediarios, [(1.0, 0.2, 6.0)])
         self.assertEqual(len(self.editor.segmentos_ruas_qml()), 2)
         self.assertEqual(self.editor.modo, ModoEditor.NAVEGAR)
+
+    def test_comprimento_geometrico_considera_toda_a_polilinha(self) -> None:
+        self._criar_rede_minima()
+        self.editor.iniciar_rua("D", "C1")
+        self.editor.adicionar_ponto_intermediario((1.0, 0.2, 6.0))
+        self.assertAlmostEqual(self.editor.comprimento_operacao_rua(), 7.0)
 
     def test_desfaz_extremos_e_curvas_sem_alterar_o_grafo(self) -> None:
         self._criar_rede_minima()
@@ -103,14 +109,30 @@ class TestEditorCidade3D(unittest.TestCase):
     def test_edita_peso_e_geometria_da_rua(self) -> None:
         self._criar_rede_minima()
         self.editor.iniciar_rua("D", "C1")
-        self.editor.confirmar_rua(5, 1)
+        self.editor.confirmar_rua(5)
         self.editor.iniciar_rua("D", "C1", editar=True)
         self.editor.adicionar_ponto_intermediario((3, 0.2, 4))
-        self.editor.confirmar_rua(2.25, 0.25)
-        self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 2.25)
+        self.editor.confirmar_rua(2.8)
+        self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 2.8)
         self.assertEqual(
             self.projeto.geometria_rua("D", "C1").pontos_intermediarios,
             [(3.0, 0.2, 4.0)],
+        )
+
+    def test_editar_apenas_geometria_preserva_peso_oficial(self) -> None:
+        self._criar_rede_minima()
+        self.editor.iniciar_rua("D", "C1")
+        self.editor.confirmar_rua(2.345678901)
+        self.editor.iniciar_rua("D", "C1", editar=True)
+        self.editor.adicionar_ponto_intermediario((2.0, 0.2, 4.0))
+        peso_atual = self.projeto.grafo.obter_distancia("D", "C1")
+        self.editor.confirmar_rua(peso_atual)
+        self.assertAlmostEqual(
+            self.projeto.grafo.obter_distancia("D", "C1"), 2.345678901
+        )
+        self.assertEqual(
+            self.projeto.geometria_rua("D", "C1").pontos_intermediarios,
+            [(2.0, 0.2, 4.0)],
         )
 
     def test_criar_rua_calibra_aresta_preexistente_sem_duplicar(self) -> None:
@@ -121,7 +143,7 @@ class TestEditorCidade3D(unittest.TestCase):
         self.editor.selecionar_extremo_rua("C1")
         self.assertEqual(self.editor.operacao_rua.editando_aresta, ("C1", "D"))
         self.editor.adicionar_ponto_intermediario((2, 0.2, 5))
-        self.editor.confirmar_rua(6, 0.5)
+        self.editor.confirmar_rua(6)
         self.assertEqual(self.projeto.grafo.obter_distancia("D", "C1"), 6)
         self.assertEqual(len(self.projeto.grafo.listar_arestas()), 1)
 
@@ -137,7 +159,7 @@ class TestEditorCidade3D(unittest.TestCase):
     def test_reposiciona_e_edita_vertice_preservando_conexoes(self) -> None:
         self._criar_rede_minima()
         self.editor.iniciar_rua("D", "C1")
-        self.editor.confirmar_rua(5, 1)
+        self.editor.confirmar_rua(5)
         self.editor.reposicionar_vertice("C1", (8, 0.5, 9))
         self.editor.editar_vertice("C1", nome="Mercado", tipo=TipoVertice.CLIENTE)
         cliente = self.projeto.grafo.obter_vertice("C1")
@@ -170,13 +192,13 @@ class TestEditorCidade3D(unittest.TestCase):
     def test_exclusao_de_rua_e_vertice_mantem_geometria_consistente(self) -> None:
         self._criar_rede_minima()
         self.editor.iniciar_rua("D", "C1")
-        self.editor.confirmar_rua(5, 1)
+        self.editor.confirmar_rua(5)
         self.editor.remover_aresta("D", "C1")
         self.assertEqual(self.projeto.ruas, {})
         self.assertFalse(self.projeto.grafo.existe_aresta("D", "C1"))
 
         self.editor.iniciar_rua("D", "C1")
-        self.editor.confirmar_rua(5, 1)
+        self.editor.confirmar_rua(5)
         self.editor.remover_vertice("C1")
         self.assertEqual(self.projeto.ruas, {})
         self.assertNotIn("C1", self.projeto.posicoes)
@@ -186,22 +208,22 @@ class TestEditorCidade3D(unittest.TestCase):
     def test_dijkstra_e_tsp_operam_no_mesmo_grafo_editado(self) -> None:
         self._criar_rede_minima()
         self.editor.iniciar_rua("D", "C1")
-        self.editor.confirmar_rua(4.5, 1)
+        self.editor.confirmar_rua(1.5)
 
         menor = dijkstra(self.projeto.grafo, "D", "C1")
         rota = caixeiro_viajante(self.projeto.grafo)
         self.assertEqual(menor.caminho, ["D", "C1"])
-        self.assertEqual(menor.distancia_total, 4.5)
+        self.assertEqual(menor.distancia_total, 1.5)
         self.assertTrue(rota.encontrada)
         self.assertEqual(rota.ordem_entregas, ["D", "C1", "D"])
-        self.assertEqual(rota.distancia_total, 9.0)
+        self.assertEqual(rota.distancia_total, 3.0)
 
     def _criar_rua_editavel(self) -> None:
         self._criar_rede_minima()
         self.editor.iniciar_rua("D", "C1")
         self.editor.adicionar_ponto_intermediario((2.0, 0.2, 3.0))
         self.editor.adicionar_ponto_intermediario((3.0, 0.2, 5.0))
-        self.editor.confirmar_rua(5.0, 1.0)
+        self.editor.confirmar_rua(5.0)
         self.editor.iniciar_rua("D", "C1", editar=True)
 
     def test_edicao_e_transacional_ate_confirmar(self) -> None:
@@ -279,7 +301,7 @@ class TestEditorCidade3D(unittest.TestCase):
         self.editor.atualizar_arraste_ponto((2.0, 0.2, 4.0))
         self.editor.finalizar_arraste_ponto(valida=True)
         comprimento = self.editor.comprimento_operacao_rua()
-        self.editor.confirmar_rua(5.0, 1.0)
+        self.editor.confirmar_rua(5.0)
         direta = self.projeto.polilinha_rua("D", "C1")
         inversa = self.projeto.polilinha_rua("C1", "D")
         self.assertEqual(inversa, tuple(reversed(direta)))
@@ -302,7 +324,7 @@ class TestEditorCidade3D(unittest.TestCase):
         self.editor.iniciar_arraste_ponto(0)
         self.editor.atualizar_arraste_ponto(novo_ponto)
         self.editor.finalizar_arraste_ponto(valida=True)
-        self.editor.confirmar_rua(5.0, 1.0)
+        self.editor.confirmar_rua(5.0)
 
         rota = calcular_dijkstra(self.projeto, "D", "C1")
         self.assertIn(novo_ponto, rota.segmentos_espaciais[0].pontos)

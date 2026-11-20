@@ -4,13 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
+from typing import Callable, Iterable
 
 from algorithms.caixeiro_viajante import (
+    CalculoTSPCancelado,
+    LIMITE_HELD_KARP_CLIENTES,
     LIMITE_PADRAO_CLIENTES,
     caixeiro_viajante,
+    held_karp,
+    permutacoes_forca_bruta,
 )
 from algorithms.dijkstra import dijkstra
+from algorithms.forca_bruta_tempo_real import (
+    ProgressoForcaBruta,
+    ResultadoForcaBrutaTempoReal,
+    forca_bruta_tempo_real,
+)
 from models.grafo import TipoVertice
 from models.projeto_cidade import ProjetoCidade
 
@@ -21,6 +30,22 @@ Ponto3D = tuple[float, float, float]
 class AlgoritmoRota(str, Enum):
     DIJKSTRA = "dijkstra"
     TSP = "tsp"
+
+
+class MetodoTSP(str, Enum):
+    FORCA_BRUTA = "forca_bruta"
+    FORCA_BRUTA_DEMONSTRACAO = "forca_bruta_demonstracao"
+    HELD_KARP = "held_karp"
+
+    @property
+    def nome_exibicao(self) -> str:
+        return {
+            MetodoTSP.FORCA_BRUTA: "Força bruta (exato)",
+            MetodoTSP.FORCA_BRUTA_DEMONSTRACAO: (
+                "Força Bruta — Demonstração em Tempo Real"
+            ),
+            MetodoTSP.HELD_KARP: "Held–Karp (exato)",
+        }[self]
 
 
 class EstadoEspacial(str, Enum):
@@ -61,6 +86,12 @@ class RotaCalculada:
     estado_espacial: EstadoEspacial
     arestas_pendentes: tuple[tuple[str, str], ...]
     clientes_selecionados: tuple[str, ...]
+    metodo_tsp: MetodoTSP | None = None
+    permutacoes_teoricas: int = 0
+    total_vertices_grafo: int = 0
+    tempo_processamento_segundos: float | None = None
+    permutacoes_avaliadas: int = 0
+    busca_tsp_completa: bool = True
 
     @property
     def calibracao_completa(self) -> bool:
@@ -161,18 +192,48 @@ def calcular_tsp(
     projeto: ProjetoCidade,
     clientes: Iterable[str],
     *,
+    metodo: MetodoTSP | str = MetodoTSP.FORCA_BRUTA,
     limite_clientes: int = LIMITE_PADRAO_CLIENTES,
+    cancelado: Callable[[], bool] | None = None,
+    progresso: Callable[[ProgressoForcaBruta], None] | None = None,
+    duracao_maxima_segundos: float | None = None,
 ) -> RotaCalculada:
     if not isinstance(projeto, ProjetoCidade):
         raise TypeError("É necessário fornecer um ProjetoCidade.")
     if isinstance(clientes, (str, bytes)):
         raise TypeError("Os clientes devem ser fornecidos em uma coleção.")
     selecionados = list(clientes)
-    resultado = caixeiro_viajante(
-        projeto.grafo,
-        selecionados,
-        limite_clientes=limite_clientes,
-    )
+    try:
+        metodo_tsp = MetodoTSP(metodo)
+    except ValueError as erro:
+        raise ValueError("Selecione um método TSP válido.") from erro
+    resultado_demonstracao: ResultadoForcaBrutaTempoReal | None = None
+    if metodo_tsp is MetodoTSP.FORCA_BRUTA:
+        resultado = caixeiro_viajante(
+            projeto.grafo,
+            selecionados,
+            limite_clientes=limite_clientes,
+        )
+    elif metodo_tsp is MetodoTSP.HELD_KARP:
+        resultado = held_karp(
+            projeto.grafo,
+            selecionados,
+            limite_clientes=LIMITE_HELD_KARP_CLIENTES,
+            cancelado=cancelado,
+        )
+    else:
+        resultado_demonstracao = forca_bruta_tempo_real(
+            projeto.grafo,
+            selecionados,
+            interromper=cancelado,
+            progresso=progresso,
+            duracao_maxima_segundos=duracao_maxima_segundos,
+        )
+        resultado = resultado_demonstracao.melhor_resultado
+        if resultado is None:
+            raise CalculoTSPCancelado(
+                "A busca foi interrompida antes de avaliar a primeira permutação."
+            )
     if not resultado.encontrada:
         inacessiveis = ", ".join(resultado.clientes_inacessiveis)
         detalhe = f": {inacessiveis}" if inacessiveis else ""
@@ -190,15 +251,68 @@ def calcular_tsp(
         estado_espacial=estado,
         arestas_pendentes=pendentes,
         clientes_selecionados=tuple(sorted(selecionados)),
+        metodo_tsp=metodo_tsp,
+        permutacoes_teoricas=permutacoes_forca_bruta(len(selecionados)),
+        total_vertices_grafo=len(projeto.grafo.listar_vertices()),
+        tempo_processamento_segundos=(
+            resultado_demonstracao.tempo_decorrido
+            if resultado_demonstracao is not None
+            else None
+        ),
+        permutacoes_avaliadas=(
+            resultado_demonstracao.permutacoes_avaliadas
+            if resultado_demonstracao is not None
+            else resultado.sequencias_avaliadas
+            if metodo_tsp is MetodoTSP.FORCA_BRUTA
+            else 0
+        ),
+        busca_tsp_completa=(
+            resultado_demonstracao.concluida
+            if resultado_demonstracao is not None
+            else True
+        ),
+    )
+
+
+def rota_de_resultado_forca_bruta(
+    projeto: ProjetoCidade,
+    resultado: ResultadoForcaBrutaTempoReal,
+) -> RotaCalculada | None:
+    """Converte o melhor resultado de um processo de demonstração para a UI."""
+    if resultado.melhor_resultado is None:
+        return None
+    base = resultado.melhor_resultado
+    percurso = tuple(base.percurso_completo)
+    segmentos, estado, pendentes = _segmentos_espaciais(projeto, percurso)
+    return RotaCalculada(
+        algoritmo=AlgoritmoRota.TSP,
+        origem=base.deposito,
+        destino=None,
+        ordem_atendimento=tuple(base.ordem_entregas),
+        percurso_completo=percurso,
+        distancia_total=base.distancia_total,
+        segmentos_espaciais=segmentos,
+        estado_espacial=estado,
+        arestas_pendentes=pendentes,
+        clientes_selecionados=resultado.clientes,
+        metodo_tsp=MetodoTSP.FORCA_BRUTA_DEMONSTRACAO,
+        permutacoes_teoricas=resultado.total_permutacoes,
+        total_vertices_grafo=len(projeto.grafo.listar_vertices()),
+        tempo_processamento_segundos=resultado.tempo_decorrido,
+        permutacoes_avaliadas=resultado.permutacoes_avaliadas,
+        busca_tsp_completa=resultado.concluida,
     )
 
 
 __all__ = [
     "AlgoritmoRota",
+    "MetodoTSP",
     "EstadoEspacial",
     "RotaCalculada",
     "RotaInacessivel",
     "SegmentoEspacialRota",
     "calcular_dijkstra",
     "calcular_tsp",
+    "rota_de_resultado_forca_bruta",
+    "CalculoTSPCancelado",
 ]

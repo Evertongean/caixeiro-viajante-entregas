@@ -24,13 +24,17 @@ from ui.editor_cidade import EditorCidade3D
 
 class TestProjetoCidade(unittest.TestCase):
     def criar_projeto(self) -> ProjetoCidade:
-        projeto = ProjetoCidade(grafo=Grafo(), fator_km_por_unidade=0.125)
+        projeto = ProjetoCidade(
+            grafo=Grafo(),
+            fator_km_por_unidade=0.125,
+            escala_km_validada=True,
+        )
         editor = EditorCidade3D(projeto)
         editor.criar_vertice("D", "Base", TipoVertice.DEPOSITO, (1, 0.1, 2))
         editor.criar_vertice("C", "Loja", TipoVertice.CLIENTE, (5, 0.1, 8))
         editor.iniciar_rua("D", "C")
         editor.adicionar_ponto_intermediario((3, 0.1, 4))
-        editor.confirmar_rua(2.75, 0.125)
+        editor.confirmar_rua(2.75)
         projeto.superficies["Object_9|plane"] = ClassificacaoSuperficie.RUA
         projeto.estacionamento_inicial = EstacionamentoVeiculo(
             deposito="D",
@@ -58,6 +62,7 @@ class TestProjetoCidade(unittest.TestCase):
             carregado.superficies["Object_9|plane"], ClassificacaoSuperficie.RUA
         )
         self.assertEqual(carregado.fator_km_por_unidade, 0.125)
+        self.assertTrue(carregado.escala_km_validada)
         self.assertEqual(carregado.estacionamento_inicial.deposito, "D")
         self.assertEqual(carregado.estacionamento_inicial.orientacao_graus, 45.0)
 
@@ -80,6 +85,36 @@ class TestProjetoCidade(unittest.TestCase):
         self.assertEqual(carregado.ruas, {})
         self.assertEqual(carregado.superficies, {})
         self.assertIsNone(carregado.estacionamento_inicial)
+        self.assertFalse(carregado.escala_km_validada)
+
+    def test_campo_ausente_de_validacao_da_escala_e_compativel(self) -> None:
+        dados = projeto_para_dados(self.criar_projeto())
+        del dados["editor_3d"]["escala_km_validada"]
+        peso_original = dados["grafo"]["arestas"][0]["peso"]
+        carregado = projeto_de_dados(dados)
+        self.assertFalse(carregado.escala_km_validada)
+        self.assertEqual(carregado.grafo.obter_distancia("D", "C"), peso_original)
+
+    def test_campos_legados_de_escala_nao_sao_obrigatorios(self) -> None:
+        dados = projeto_para_dados(self.criar_projeto())
+        del dados["editor_3d"]["fator_km_por_unidade"]
+        del dados["editor_3d"]["escala_km_validada"]
+        peso_original = dados["grafo"]["arestas"][0]["peso"]
+        carregado = projeto_de_dados(dados)
+        self.assertEqual(carregado.fator_km_por_unidade, 1.0)
+        self.assertFalse(carregado.escala_km_validada)
+        self.assertEqual(carregado.grafo.obter_distancia("D", "C"), peso_original)
+
+    def test_round_trip_nao_arredonda_peso_antigo_preciso(self) -> None:
+        projeto = self.criar_projeto()
+        projeto.grafo.atualizar_peso_aresta("D", "C", 2.345678901)
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = Path(pasta) / "preciso.json"
+            salvar_projeto_cidade(projeto, caminho)
+            carregado = carregar_projeto_cidade(caminho)
+        self.assertEqual(
+            carregado.grafo.obter_distancia("D", "C"), 2.345678901
+        )
 
     def test_normaliza_rua_legada_duplicada_nos_dois_sentidos(self) -> None:
         dados = projeto_para_dados(self.criar_projeto())

@@ -7,16 +7,34 @@ clientes como pontos intermediários.
 
 from __future__ import annotations
 
+from array import array
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import permutations
-from math import inf, isinf
+from math import factorial, inf, isinf
+from typing import Callable
 
 from .dijkstra import ResultadoDijkstraTodos, dijkstra_todos
 from models.grafo import Grafo, TipoVertice
 
 
 LIMITE_PADRAO_CLIENTES = 8
+LIMITE_HELD_KARP_CLIENTES = 17
+
+
+class CalculoTSPCancelado(RuntimeError):
+    """Interrupção cooperativa e segura de um cálculo do TSP."""
+
+
+def permutacoes_forca_bruta(quantidade_clientes: int) -> int:
+    """Retorna ``n!``, o espaço teórico de busca da força bruta."""
+    if (
+        not isinstance(quantidade_clientes, int)
+        or isinstance(quantidade_clientes, bool)
+        or quantidade_clientes < 0
+    ):
+        raise ValueError("A quantidade de clientes deve ser um inteiro não negativo.")
+    return factorial(quantidade_clientes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +286,148 @@ def caixeiro_viajante(
         quantidade_clientes_atendidos=len(clientes_ids),
         segmentos=segmentos,
         etapas=tuple(etapas),
+    )
+
+
+def held_karp(
+    grafo: Grafo,
+    clientes: Iterable[str] | None = None,
+    *,
+    limite_clientes: int = LIMITE_HELD_KARP_CLIENTES,
+    cancelado: Callable[[], bool] | None = None,
+) -> ResultadoCaixeiroViajante:
+    """Resolve o TSP exatamente por programação dinâmica de Held–Karp.
+
+    A tabela densa usa ``array`` em vez de milhões de objetos Python. Para os
+    17 clientes do cenário acadêmico, custos e predecessores ocupam cerca de
+    20 MiB. O cancelamento é cooperativo e não deixa estado parcial exposto.
+    """
+    if not isinstance(grafo, Grafo):
+        raise TypeError("É necessário fornecer uma instância de Grafo.")
+    if (
+        not isinstance(limite_clientes, int)
+        or isinstance(limite_clientes, bool)
+        or limite_clientes < 0
+        or limite_clientes > LIMITE_HELD_KARP_CLIENTES
+    ):
+        raise ValueError(
+            f"O limite do Held-Karp deve estar entre 0 e {LIMITE_HELD_KARP_CLIENTES}."
+        )
+    deposito = grafo.obter_deposito()
+    if deposito is None:
+        raise ValueError("O grafo não possui um depósito principal definido.")
+    clientes_ids = _selecionar_clientes(grafo, clientes)
+    quantidade = len(clientes_ids)
+    if quantidade > limite_clientes:
+        raise ValueError(
+            f"O limite de {limite_clientes} clientes para Held-Karp foi "
+            f"ultrapassado: {quantidade} selecionados."
+        )
+    deposito_id = deposito.identificador
+    if not clientes_ids:
+        return ResultadoCaixeiroViajante(
+            deposito=deposito_id,
+            ordem_entregas=[deposito_id],
+            percurso_completo=[deposito_id],
+            distancia_total=0.0,
+            encontrada=True,
+            sequencias_avaliadas=1,
+            quantidade_clientes_atendidos=0,
+        )
+    if cancelado is not None and cancelado():
+        raise CalculoTSPCancelado("Cálculo cancelado pelo usuário.")
+
+    locais_relevantes = [deposito_id, *clientes_ids]
+    menores_caminhos = {
+        origem: dijkstra_todos(grafo, origem) for origem in locais_relevantes
+    }
+    clientes_inacessiveis = tuple(
+        cliente
+        for cliente in clientes_ids
+        if isinf(menores_caminhos[deposito_id].distancias[cliente])
+    )
+    if clientes_inacessiveis:
+        return ResultadoCaixeiroViajante(
+            deposito=deposito_id,
+            ordem_entregas=[],
+            percurso_completo=[],
+            distancia_total=inf,
+            encontrada=False,
+            sequencias_avaliadas=0,
+            quantidade_clientes_atendidos=0,
+            clientes_inacessiveis=clientes_inacessiveis,
+        )
+
+    total_mascaras = 1 << quantidade
+    total_celulas = total_mascaras * quantidade
+    custos = array("d", [inf]) * total_celulas
+    predecessores = array("b", [-1]) * total_celulas
+    dist_deposito = menores_caminhos[deposito_id].distancias
+    for indice, cliente in enumerate(clientes_ids):
+        custos[((1 << indice) * quantidade) + indice] = dist_deposito[cliente]
+
+    transicoes = 0
+    for mascara in range(1, total_mascaras):
+        if mascara & 0xFF == 0 and cancelado is not None and cancelado():
+            raise CalculoTSPCancelado("Cálculo cancelado pelo usuário.")
+        for destino_indice, destino in enumerate(clientes_ids):
+            bit_destino = 1 << destino_indice
+            if not mascara & bit_destino:
+                continue
+            anterior = mascara ^ bit_destino
+            if anterior == 0:
+                continue
+            melhor = inf
+            melhor_predecessor = -1
+            bits = anterior
+            while bits:
+                bit = bits & -bits
+                origem_indice = bit.bit_length() - 1
+                candidato = (
+                    custos[anterior * quantidade + origem_indice]
+                    + menores_caminhos[clientes_ids[origem_indice]].distancias[destino]
+                )
+                transicoes += 1
+                if candidato < melhor:
+                    melhor = candidato
+                    melhor_predecessor = origem_indice
+                bits ^= bit
+            posicao = mascara * quantidade + destino_indice
+            custos[posicao] = melhor
+            predecessores[posicao] = melhor_predecessor
+
+    mascara = total_mascaras - 1
+    melhor_distancia = inf
+    ultimo = -1
+    for indice, cliente in enumerate(clientes_ids):
+        candidato = (
+            custos[mascara * quantidade + indice]
+            + menores_caminhos[cliente].distancias[deposito_id]
+        )
+        transicoes += 1
+        if candidato < melhor_distancia:
+            melhor_distancia = candidato
+            ultimo = indice
+
+    ordem_inversa: list[str] = []
+    while ultimo >= 0:
+        ordem_inversa.append(clientes_ids[ultimo])
+        posicao = mascara * quantidade + ultimo
+        anterior = predecessores[posicao]
+        mascara ^= 1 << ultimo
+        ultimo = anterior
+    ordem_clientes = list(reversed(ordem_inversa))
+    ordem_entregas = [deposito_id, *ordem_clientes, deposito_id]
+    segmentos = _construir_segmentos(ordem_entregas, menores_caminhos)
+    return ResultadoCaixeiroViajante(
+        deposito=deposito_id,
+        ordem_entregas=ordem_entregas,
+        percurso_completo=_concatenar_segmentos(segmentos),
+        distancia_total=melhor_distancia,
+        encontrada=True,
+        sequencias_avaliadas=transicoes,
+        quantidade_clientes_atendidos=quantidade,
+        segmentos=segmentos,
     )
 
 

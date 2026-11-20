@@ -69,6 +69,7 @@ python3 main.py
 │   ├── dijkstra.py
 │   └── caixeiro_viajante.py
 ├── models/
+│   ├── cenario_academico.py  # acesso aos exemplos acadêmicos opcionais
 │   ├── cenario_inicial.py     # estado mínimo e configuração da GUI
 │   ├── grafo.py
 │   ├── missao.py             # movimento, estados, progresso e entregas
@@ -77,7 +78,7 @@ python3 main.py
 │   ├── rota.py               # resultado matemático e validação espacial
 │   └── trafegabilidade.py    # grade, largura, segmentos e busca viária
 ├── ui/
-│   ├── animacao_missao.py    # relógio Qt não bloqueante
+│   ├── animacao_missao.py    # relógio, cadências e diagnóstico opcional
 │   ├── apresentacao_rota.py  # segmentos e marcadores declarativos da rota
 │   ├── assets_3d.py          # valida GLB e gerencia o cache Balsam
 │   ├── reconhecimento_superficies.py # gera o mapa viário automático
@@ -91,7 +92,10 @@ python3 main.py
 │   └── visualizacao_3d.py    # ponte QWidget/Qt Quick 3D
 ├── tests/
 ├── assets/
-│   ├── config/cidade-inicial.json
+│   ├── config/
+│   │   ├── cidade-inicial.json
+│   │   ├── grafo-academico-5-vertices.json
+│   │   └── grafo-academico-18-vertices.json
 │   └── models/
 │       ├── cidade.glb
 │       └── carro.glb
@@ -113,6 +117,56 @@ layout foi verificado em 1920×1080, 1366×768, 1280×720 e 960×640.
 
 Os controles da câmera, do enquadramento, da seção **Editar cidade**, do
 cálculo de rotas e da missão animada são funcionais.
+
+O botão **Carregar grafo acadêmico** abre, de forma opcional, o exemplo com os
+vértices `1` a `5` e as oito arestas da atividade. Ele não altera o estado
+inicial do programa nem o comportamento de **Novo**. Se o projeto atual tiver
+alterações não salvas, a substituição pede confirmação. O exemplo é aberto
+como modelo: ao editar e salvar, a interface solicita outro arquivo em vez de
+sobrescrever o JSON distribuído em
+`assets/config/grafo-academico-5-vertices.json`.
+
+Nesse cenário, `1` é o depósito e `2`, `3`, `4`, `5` são os clientes. Os pesos
+oficiais são `1–2=2`, `1–4=3`, `1–5=6`, `2–3=4`, `2–4=3`, `3–4=7`, `3–5=3` e
+`4–5=3` km. Cada aresta tem uma polilinha própria sobre as ruas reais; o
+comprimento 3D não substitui esses pesos. Em TSP com todos os clientes, o custo
+ótimo é 15 km, com a ordem `1 → 2 → 3 → 5 → 4 → 1` ou sua inversa.
+
+O botão **Carregar grafo de 18 vértices** abre o exemplo completo da Figura 2
+de Póvoa (2001), mantendo `1` como depósito e `2` a `18` como clientes
+selecionáveis. Held–Karp permite calcular exatamente os 17 clientes; a força
+bruta original permanece separada e limitada a oito. Todos os vértices também
+continuam disponíveis ao Dijkstra como intermediários dos menores caminhos.
+
+As 45 arestas oficiais são:
+
+```text
+1–2=20   1–8=29   1–12=29  1–13=37
+2–3=25   2–8=28   2–12=39
+3–4=25   3–8=30   3–13=54
+4–5=39   4–6=32   4–7=42   4–9=23   4–10=33  4–14=56
+5–6=12   5–7=26   5–10=19
+6–7=17   6–10=35  6–11=30
+7–11=38
+8–12=25  8–13=22
+9–10=26  9–13=34  9–14=37  9–16=43
+10–11=24 10–14=30 10–15=19
+11–15=26 11–18=36
+12–13=27 12–16=43
+13–14=24 13–16=19
+14–15=20 14–16=19 14–17=17
+15–17=18 15–18=21
+16–17=26
+17–18=15
+```
+
+`scripts/gerar_grafo_academico_18.py` reproduz o JSON a partir da malha viária
+aferida. Ele mantém o depósito na vaga `D`, seleciona outros 17 candidatos por
+dispersão na distância da rede e cria cada polilinha por menor caminho
+geométrico sobre trechos já confirmados. Polilinhas podem compartilhar asfalto;
+os controles intermediários nunca viram vértices acadêmicos e os comprimentos
+3D nunca substituem os pesos acima. Todas as 45 geometrias do arquivo
+distribuído passam no reconhecedor com a margem de segurança do carro.
 
 Use **Adicionar cliente** e clique no asfalto para cadastrar o primeiro local
 de entrega. **Criar rua** passa a ficar disponível quando houver ao menos dois
@@ -178,16 +232,42 @@ em um segmento para inserir na ordem correta, selecione um controle para
 desfazer, refazer, remover, confirmar e cancelar. Cancelar restaura integralmente
 o traçado original.
 
-Ao confirmar uma rua, o diálogo mostra o comprimento geométrico, o fator
-configurável em km/unidade e a sugestão resultante. O peso oficial continua
-sendo um campo separado, validado pelo grafo e usado por Dijkstra e TSP.
+Ao confirmar uma rua, o diálogo mostra somente a conexão e o campo
+**Distância da rua (km)**. Informe manualmente um valor positivo com uma casa
+decimal e vírgula brasileira, como `1,5` ou `2,8`, e use **Salvar**. Não há
+escala geral, fator de conversão ou distância sugerida no fluxo de edição.
+
+O valor informado é gravado diretamente como peso da aresta, sem conversão ou
+multiplicação. Dijkstra, TSP e os relatórios usam exatamente esse peso. O
+comprimento da polilinha 3D permanece independente e continua disponível para
+desenho, validação espacial e animação do veículo.
+
+As distâncias da interface são apresentadas com uma casa decimal e vírgula
+brasileira, como `7,5 km`. Ao editar uma rua antiga, o campo apresenta esse
+formato simplificado, mas o peso original com maior precisão continua intacto
+se o usuário não modificar o valor. Se houver alteração explícita, o novo
+valor de uma casa decimal passa a ser o peso oficial.
+
+Projetos antigos continuam aceitando e preservando os campos legados de escala
+durante leitura e salvamento. Esses dados existem apenas para compatibilidade:
+não são exigidos nem utilizados para calcular o peso de ruas novas ou editadas.
 
 ### Calcular rota
 
 Em **Dijkstra — menor caminho**, escolha qualquer origem e destino do grafo e
 pressione **Calcular menor caminho**. Em **Caixeiro Viajante — TSP**, confira o
-depósito, marque individualmente até oito clientes ou use **Selecionar todos**
+depósito, escolha **Held–Karp** para até 17 clientes (ou força bruta para até
+oito) e marque os clientes desejados ou use **Selecionar todos**
 e pressione **Calcular melhor rota**.
+
+O método **Força Bruta — Demonstração em Tempo Real** também aceita até 17
+clientes. Ele enumera e calcula cada permutação em um processo separado, sem
+podas e sem usar Held–Karp internamente. O painel mostra contagem real, taxa,
+tempo, melhor ordem e uma estimativa baseada exclusivamente na taxa observada.
+A execução pode ser interrompida manualmente ou após 10, 30 ou 60 segundos; a
+melhor solução parcial continua visível, mas não é identificada como ótima nem
+libera a missão 3D. Somente a enumeração completa garante otimalidade nesse
+modo.
 
 A interface chama diretamente os algoritmos de `algorithms/`; ela não contém
 uma segunda implementação matemática. No TSP, a ordem de atendimento e o
@@ -225,6 +305,19 @@ preservados. A distância mostrada em quilômetros permanece sendo o peso
 oficial do grafo, distribuído proporcionalmente ao avanço geométrico; a nova
 cinemática atua somente nas unidades espaciais da cena.
 
+A lógica oficial é atualizada por um `PreciseTimer` a cada 33 ms usando o tempo
+monotônico realmente decorrido. Atrasos isolados são limitados a 50 ms por
+atualização para não produzir teletransportes. A pose resultante não é aplicada
+como um salto: um `FrameAnimation` no QML interpola posição e orientação na
+cadência efetivamente renderizada. Quando um quadro lógico atravessa uma
+esquina, os pontos cruzados são enviados junto com o estado e a interpolação
+percorre os segmentos da polilinha, sem cortar a curva em diagonal.
+
+O painel usa uma cadência independente de até 10 Hz, mantendo atualizações
+imediatas para pausas, entregas, conclusão e outros eventos. Modelos, linhas,
+marcadores e etiquetas não são reconstruídos a cada quadro; o destaque da rota
+só muda ao trocar de aresta, cliente ou estado de conclusão.
+
 Mudanças de direção inferiores a 12° são consideradas colineares. Curvas
 suaves, moderadas, fechadas e retornos em U usam, respectivamente, 85%, 62%,
 40% e 22% da velocidade máxima. A frenagem começa antes do vértice pela relação
@@ -234,7 +327,9 @@ e podem ser substituídos ao construir `ControladorMissao`, sem alterar Dijkstra
 TSP ou os pesos do grafo.
 
 Durante a execução é possível pausar, continuar, reiniciar, encerrar e escolher
-0,5×, 1×, 2× ou 4×. Esses fatores escalam o tempo da simulação, inclusive
+0,5×, 1×, 2×, 4×, 8×, 16×, 32× ou 64×. O **Modo apresentação** começa em
+16× e continua permitindo ajustes. Esses fatores escalam o tempo da simulação,
+inclusive
 aceleração, frenagem e espera de entrega. Uma linha discreta mostra a velocidade
 atual em unidades espaciais por segundo e a fase do movimento; não é exibido
 km/h porque a escala temporal da cena não representa velocidade rodoviária
@@ -268,8 +363,9 @@ destaque ciano.
 
 O eixo frontal foi conferido no `carro.glb`: a grade e o para-choque dianteiros
 estão no extremo local `-Z`. A transformação do asset aplica a correção de
-180° ao yaw da rota, enquanto a câmera é calculada separadamente pela direção
-de movimento e suavizada nas curvas.
+180° ao yaw da rota. A câmera de perseguição é calculada a cada quadro a partir
+da pose visual interpolada e suavizada com delta real, mantendo carro e câmera
+sincronizados nas curvas.
 
 Nenhuma operação de câmera modifica a geometria dos modelos.
 
@@ -323,9 +419,12 @@ escura como sucesso.
 `algorithms/dijkstra.py` parte da origem, relaxa as arestas com uma fila de
 prioridade e reconstrói o caminho mínimo pelos predecessores, em
 `O((V + E) log V)`. Pesos negativos são proibidos pelo modelo.
-`algorithms/caixeiro_viajante.py` avalia exatamente as permutações dos clientes,
-com custo fatorial `O(C! · C)` e limite padrão de oito clientes. Para cada par
-de paradas, a distância e o caminho real são obtidos com Dijkstra; por isso a
+`algorithms/caixeiro_viajante.py` preserva a força bruta por permutações, com
+custo fatorial `O(C! · C)` e limite padrão de oito clientes, e oferece
+Held–Karp exato para até 17 clientes. O painel mostra `n!` como o espaço de
+busca teórico da força bruta, não como contagem de operações do Held–Karp. Para
+cada par de paradas, a distância e o caminho real são obtidos com Dijkstra; por
+isso a
 ordem de entregas pode ser menor que o percurso completo pelos cruzamentos.
 
 O cenário de demonstração confirma:
@@ -404,6 +503,23 @@ deve rejeitá-lo e explicar a classificação automática encontrada.
 QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
 python3 -m compileall -q algorithms models ui main.py gui_main.py tests
 ```
+
+Para reproduzir e validar isoladamente o cenário acadêmico completo:
+
+```bash
+python3 scripts/gerar_grafo_academico_18.py
+QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_grafo_academico_18 -v
+```
+
+O diagnóstico de animação é opcional e não adiciona elementos à interface:
+
+```bash
+DELIVERY_ROUTE_DIAGNOSTICO_ANIMACAO=1 python3 gui_main.py
+```
+
+Ao encerrar ou concluir a missão, o log informa frequência lógica, FPS
+renderizado quando o backend fornece quadros, frequência do painel, tempos do
+controlador e da transferência ao QML, além de intervalos anormalmente longos.
 
 A suíte cobre o núcleo matemático, os formatos novo e legado, reconhecimento e
 cache de superfícies, largura do veículo, busca viária,

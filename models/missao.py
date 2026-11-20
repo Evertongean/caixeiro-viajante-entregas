@@ -11,6 +11,7 @@ from models.rota import AlgoritmoRota, RotaCalculada
 
 Ponto3D = tuple[float, float, float]
 EPSILON = 1e-10
+MULTIPLICADORES_SIMULACAO = (0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0)
 
 
 class ErroMissao(ValueError):
@@ -98,6 +99,7 @@ class QuadroMissao:
     distancia_proxima_entrega: float | None
     distancia_destino_final: float
     eventos: tuple[EventoMissao, ...] = ()
+    pontos_interpolacao: tuple[Ponto3D, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,8 +385,9 @@ class ControladorMissao:
 
     @multiplicador_velocidade.setter
     def multiplicador_velocidade(self, valor: float) -> None:
-        if valor not in (0.5, 1.0, 2.0, 4.0):
-            raise ValueError("A velocidade deve ser 0,5x, 1x, 2x ou 4x.")
+        if valor not in MULTIPLICADORES_SIMULACAO:
+            opcoes = ", ".join(f"{item:g}x" for item in MULTIPLICADORES_SIMULACAO)
+            raise ValueError(f"O multiplicador deve ser um destes valores: {opcoes}.")
         self._multiplicador = float(valor)
 
     @property
@@ -486,6 +489,7 @@ class ControladorMissao:
         self.velocidade_atual = 0.0
         self.velocidade_desejada = 0.0
         self.freando = False
+        self._pontos_interpolacao: list[Ponto3D] = [self.posicao]
 
     def iniciar(self) -> QuadroMissao:
         if self.estado is not EstadoMissao.PRONTA:
@@ -663,6 +667,7 @@ class ControladorMissao:
             ),
             distancia_destino_final=distancia_final,
             eventos=eventos,
+            pontos_interpolacao=tuple(self._pontos_interpolacao),
         )
 
     def _concluir_aresta(self, trecho: _TrechoMovimento) -> None:
@@ -697,6 +702,8 @@ class ControladorMissao:
             if self._distancia_no_trecho < trecho.comprimento - EPSILON:
                 break
             self.posicao = trecho.fim
+            if _distancia(self._pontos_interpolacao[-1], trecho.fim) > EPSILON:
+                self._pontos_interpolacao.append(trecho.fim)
             self._concluir_aresta(trecho)
             self._indice_trecho += 1
             self._distancia_no_trecho = 0.0
@@ -821,6 +828,7 @@ class ControladorMissao:
         if self.estado not in (EstadoMissao.EM_MOVIMENTO, EstadoMissao.EM_ENTREGA):
             return self.quadro()
 
+        self._pontos_interpolacao = [self.posicao]
         restante_tempo = float(delta_segundos) * self._multiplicador
         eventos: list[EventoMissao] = []
         while restante_tempo > EPSILON and self.estado in (
@@ -845,6 +853,8 @@ class ControladorMissao:
             self.tempo_decorrido += passo
             restante_tempo -= passo
 
+        if _distancia(self._pontos_interpolacao[-1], self.posicao) > EPSILON:
+            self._pontos_interpolacao.append(self.posicao)
         return self.quadro(tuple(eventos))
 
     def resumo(self) -> ResumoMissao:
@@ -870,6 +880,7 @@ __all__ = [
     "EstadoMissao",
     "EventoMissao",
     "FaseMovimento",
+    "MULTIPLICADORES_SIMULACAO",
     "QuadroMissao",
     "ResumoMissao",
     "TipoCurva",

@@ -61,6 +61,7 @@ class ProjetoCidade:
     modelo_cidade: str = "assets/models/cidade.glb"
     modelo_carro: str = "assets/models/carro.glb"
     fator_km_por_unidade: float = 1.0
+    escala_km_validada: bool = False
     estacionamento_inicial: EstacionamentoVeiculo | None = None
 
     @staticmethod
@@ -116,6 +117,8 @@ def projeto_para_dados(projeto: ProjetoCidade) -> dict[str, Any]:
         or projeto.fator_km_por_unidade <= 0
     ):
         raise ValueError("O fator de conversão deve ser positivo e finito.")
+    if not isinstance(projeto.escala_km_validada, bool):
+        raise TypeError("O estado de validação da escala deve ser booleano.")
     vertices = {vertice.identificador for vertice in projeto.grafo.listar_vertices()}
     if not set(projeto.posicoes).issubset(vertices):
         raise ValueError("Existem posições associadas a vértices inexistentes.")
@@ -195,6 +198,7 @@ def projeto_para_dados(projeto: ProjetoCidade) -> dict[str, Any]:
             for superficie, classificacao in sorted(projeto.superficies.items())
         },
         "fator_km_por_unidade": float(projeto.fator_km_por_unidade),
+        "escala_km_validada": projeto.escala_km_validada,
     }
     if dados_estacionamento is not None:
         editor_3d["estacionamento_inicial"] = dados_estacionamento
@@ -265,6 +269,9 @@ def projeto_de_dados(dados: Any) -> ProjetoCidade:
         or fator <= 0
     ):
         raise ErroPersistencia("O fator de conversão deve ser positivo e finito.")
+    escala_validada = editor.get("escala_km_validada", False)
+    if not isinstance(escala_validada, bool):
+        raise ErroPersistencia("O estado de validação da escala deve ser booleano.")
 
     ruas_brutas = editor.get("ruas", [])
     if not isinstance(ruas_brutas, list):
@@ -371,6 +378,7 @@ def projeto_de_dados(dados: Any) -> ProjetoCidade:
         modelo_cidade=cidade,
         modelo_carro=carro,
         fator_km_por_unidade=float(fator),
+        escala_km_validada=escala_validada,
         estacionamento_inicial=estacionamento,
     )
 

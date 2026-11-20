@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from math import isfinite
+
+from PySide6.QtCore import QLocale, Qt
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from models.grafo import TipoVertice, Vertice
 from models.projeto_cidade import ClassificacaoSuperficie
+from .formatacao import arredondar_para_exibicao
 
 
 class DialogoVertice(QDialog):
@@ -138,8 +142,6 @@ class DialogoRua(QDialog):
         self,
         origem: str,
         destino: str,
-        comprimento: float,
-        fator_atual: float,
         parent=None,
         *,
         peso_atual: float | None = None,
@@ -148,53 +150,80 @@ class DialogoRua(QDialog):
         self.setWindowTitle("Confirmar rua")
         self.setMinimumWidth(420)
         layout = QVBoxLayout(self)
-        aviso = QLabel(
-            "A conexão requer calibração manual: o editor valida cada ponto "
-            "clicado, mas não toda a faixa entre eles. Confira se a polilinha "
-            "não atravessa prédios e adicione curvas quando necessário. O "
-            "comprimento visual é apenas uma sugestão; o peso abaixo é o valor "
-            "oficial usado por Dijkstra e TSP."
-        )
-        aviso.setWordWrap(True)
-        layout.addWidget(aviso)
         formulario = QFormLayout()
-        formulario.addRow("Extremos", QLabel(f"{origem} ↔ {destino}"))
-        formulario.addRow("Comprimento 3D", QLabel(f"{comprimento:.4f} unidades"))
-        self.fator = QDoubleSpinBox()
-        self.fator.setDecimals(6)
-        self.fator.setRange(0.000001, 1_000_000)
-        self.fator.setValue(fator_atual)
-        self.fator.setSuffix(" km/unidade")
+        formulario.addRow("Conexão", QLabel(f"{origem} ↔ {destino}"))
         self.peso = QDoubleSpinBox()
-        self.peso.setDecimals(6)
-        self.peso.setRange(0.000001, 1_000_000_000)
-        self.peso.setSuffix(" km")
-        self.peso.setValue(
-            peso_atual if peso_atual is not None else comprimento * fator_atual
+        self.peso.setLocale(
+            QLocale(QLocale.Language.Portuguese, QLocale.Country.Brazil)
         )
-        self.sugestao = QLabel()
-        self.fator.valueChanged.connect(self._atualizar_sugestao)
-        self._comprimento = comprimento
-        self._atualizar_sugestao()
-        formulario.addRow("Fator", self.fator)
-        formulario.addRow("Sugestão geométrica", self.sugestao)
-        formulario.addRow("Peso oficial", self.peso)
+        self.peso.setDecimals(1)
+        self.peso.setRange(0.0, 1_000_000_000_000)
+        self.peso.setSuffix(" km")
+        self.peso.setKeyboardTracking(False)
+        self.peso.setCorrectionMode(
+            QAbstractSpinBox.CorrectionMode.CorrectToPreviousValue
+        )
+        self._peso_original = float(peso_atual) if peso_atual is not None else None
+        if self._peso_original is not None and (
+            not isfinite(self._peso_original) or self._peso_original <= 0
+        ):
+            raise ValueError("A distância oficial atual deve ser positiva e finita.")
+        self._peso_modificado = False
+        valor_inicial = self._peso_original if self._peso_original is not None else 0.0
+        self.peso.setValue(arredondar_para_exibicao(valor_inicial))
+        self.peso.valueChanged.connect(self._marcar_peso_modificado)
+        self.peso.lineEdit().textChanged.connect(self._marcar_peso_modificado)
+        formulario.addRow("Distância da rua (km)", self.peso)
         layout.addLayout(formulario)
+        self.erro_distancia = QLabel()
+        self.erro_distancia.setStyleSheet("color: #FCA5A5;")
+        self.erro_distancia.setWordWrap(True)
+        layout.addWidget(self.erro_distancia)
         botoes = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
-        botoes.accepted.connect(self.accept)
+        self.botao_salvar = botoes.button(QDialogButtonBox.StandardButton.Save)
+        self.botao_cancelar = botoes.button(QDialogButtonBox.StandardButton.Cancel)
+        self.botao_salvar.setText("Salvar")
+        self.botao_cancelar.setText("Cancelar")
+        botoes.accepted.connect(self._validar)
         botoes.rejected.connect(self.reject)
         layout.addWidget(botoes)
 
-    def _atualizar_sugestao(self) -> None:
-        self.sugestao.setText(
-            f"{self._comprimento * self.fator.value():.6f} km"
-        )
+    def _marcar_peso_modificado(self, *_args) -> None:
+        self._peso_modificado = True
 
-    def dados(self) -> tuple[float, float]:
-        return self.peso.value(), self.fator.value()
+    def _validar(self) -> None:
+        try:
+            self.dados()
+        except ValueError:
+            if self.peso.hasAcceptableInput() and self.peso.value() <= 0:
+                mensagem = (
+                    "A distância deve ser positiva. Informe ao menos 0,1 km."
+                )
+            else:
+                mensagem = "Informe uma distância numérica válida."
+            self.erro_distancia.setText(mensagem)
+            self.peso.setFocus()
+            return
+        self.erro_distancia.clear()
+        self.accept()
+
+    def dados(self) -> float:
+        if self._peso_original is not None and not self._peso_modificado:
+            return self._peso_original
+        if not self.peso.hasAcceptableInput():
+            raise ValueError("A distância da rua deve ser um número válido.")
+        self.peso.interpretText()
+        valor = self.peso.value()
+        if not isfinite(valor) or valor <= 0:
+            raise ValueError("A distância da rua deve ser positiva e finita.")
+        return valor
 
 
-__all__ = ["DialogoRua", "DialogoSuperficie", "DialogoVertice"]
+__all__ = [
+    "DialogoRua",
+    "DialogoSuperficie",
+    "DialogoVertice",
+]

@@ -9,11 +9,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QLabel, QPushButton
 
     from models.grafo import TipoVertice
     from models.projeto_cidade import ClassificacaoSuperficie
-    from ui.dialogos_editor import DialogoSuperficie, DialogoVertice
+    from ui.dialogos_editor import (
+        DialogoRua,
+        DialogoSuperficie,
+        DialogoVertice,
+    )
 
     PYSIDE6_DISPONIVEL = True
 except ModuleNotFoundError:
@@ -69,6 +74,61 @@ class TestDialogosEditor(unittest.TestCase):
         identificador, nome, tipo = dialogo.dados()
         self.assertEqual((identificador, nome), ("C9", "Cliente 9"))
         self.assertIs(tipo, TipoVertice.CLIENTE)
+
+    def test_dialogo_rua_mostra_apenas_conexao_distancia_e_acoes(self) -> None:
+        dialogo = DialogoRua("A", "B")
+        textos = [rotulo.text() for rotulo in dialogo.findChildren(QLabel)]
+        botoes = [botao.text() for botao in dialogo.findChildren(QPushButton)]
+        self.assertIn("A ↔ B", textos)
+        self.assertIn("Distância da rua (km)", textos)
+        self.assertEqual(len(dialogo.findChildren(QDoubleSpinBox)), 1)
+        self.assertEqual(dialogo.peso.decimals(), 1)
+        self.assertEqual(set(botoes), {"Salvar", "Cancelar"})
+        conteudo = " ".join(textos + botoes).lower()
+        self.assertNotIn("sugest", conteudo)
+        self.assertNotIn("escala", conteudo)
+        self.assertNotIn("fator", conteudo)
+
+    def test_distancia_manual_aceita_virgula_e_salva_valor_exibido(self) -> None:
+        for entrada, esperado in (("1,5", 1.5), ("2,8", 2.8)):
+            with self.subTest(entrada=entrada):
+                dialogo = DialogoRua("A", "B")
+                campo = dialogo.peso.lineEdit()
+                campo.selectAll()
+                QTest.keyClicks(campo, entrada)
+                dialogo.peso.interpretText()
+                self.assertEqual(dialogo.dados(), esperado)
+                self.assertEqual(dialogo.peso.text(), f"{entrada} km")
+
+    def test_peso_antigo_preciso_so_muda_com_acao_explicita(self) -> None:
+        dialogo = DialogoRua("A", "B", peso_atual=2.345678901)
+        self.assertEqual(dialogo.peso.text(), "2,3 km")
+        self.assertEqual(dialogo.dados(), 2.345678901)
+        dialogo.peso.setValue(2.8)
+        self.assertEqual(dialogo.dados(), 2.8)
+
+    def test_peso_antigo_pequeno_pode_ser_preservado_sem_salvar_zero(self) -> None:
+        dialogo = DialogoRua("A", "B", peso_atual=0.04)
+        self.assertEqual(dialogo.peso.text(), "0,0 km")
+        dialogo.botao_salvar.click()
+        self.assertEqual(dialogo.result(), dialogo.DialogCode.Accepted)
+        self.assertEqual(dialogo.dados(), 0.04)
+
+    def test_distancia_invalida_nao_aceita_o_dialogo(self) -> None:
+        for entrada in ("texto inválido", "0", "-1,0"):
+            with self.subTest(entrada=entrada):
+                dialogo = DialogoRua("A", "B")
+                dialogo.peso.lineEdit().setText(entrada)
+                dialogo.botao_salvar.click()
+                self.assertNotEqual(dialogo.result(), dialogo.DialogCode.Accepted)
+                self.assertTrue(dialogo.erro_distancia.text())
+
+    def test_rua_nova_exige_distancia_positiva(self) -> None:
+        dialogo = DialogoRua("A", "B")
+        self.assertEqual(dialogo.peso.text(), "0,0 km")
+        dialogo.botao_salvar.click()
+        self.assertNotEqual(dialogo.result(), dialogo.DialogCode.Accepted)
+        self.assertIn("0,1 km", dialogo.erro_distancia.text())
 
 
 if __name__ == "__main__":

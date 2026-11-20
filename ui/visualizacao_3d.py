@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from PySide6 import QtQuick3D  # noqa: F401 - registra os tipos QML
 from PySide6.QtCore import QCoreApplication, QTimer, QUrl, Qt, Signal
@@ -34,6 +34,9 @@ from .reconhecimento_superficies import (
     ResultadoReconhecimento,
     reconhecer_superficies,
 )
+
+if TYPE_CHECKING:
+    from .animacao_missao import DiagnosticoDesempenho
 
 
 # O GLB foi inspecionado por malha/material: grade e para-choque dianteiros
@@ -104,6 +107,8 @@ class Visualizacao3D(QQuickWidget):
         self._rede_ruas_visivel = True
         self._indice_controle_arraste: int | None = None
         self._ultimo_arraste_encontrado = False
+        self._diagnostico_desempenho: DiagnosticoDesempenho | None = None
+        self._sinal_quadro_diagnostico_conectado = False
 
     @property
     def referencias_modelos(self) -> tuple[Path, Path]:
@@ -215,6 +220,7 @@ class Visualizacao3D(QQuickWidget):
             sinal_arraste = getattr(raiz, "pontoArraste", None)
             if sinal_arraste is not None:
                 sinal_arraste.connect(self._receber_arraste)
+            self._conectar_diagnostico_desempenho()
             QTimer.singleShot(0, self._atualizar_estado_modelos)
             self._registrar(
                 "Modelos preparados; aguardando a materialização gráfica da cena."
@@ -398,13 +404,15 @@ class Visualizacao3D(QQuickWidget):
     def camera_atras_do_carro(self) -> None:
         self.camera.preparar_camera_atras_do_carro(self.posicao_carro)
         self.camera_seguidora.reiniciar()
-        self.atualizar_carro(
+        self.camera_seguidora.atualizar(
             self.posicao_carro,
             self.orientacao_carro,
             0.0,
             imediato=True,
-            freando=self.freando_carro,
         )
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.atualizarCameraVisual(0.0, True)
         self._aplicar_camera()
 
     def atualizar_carro(
@@ -415,13 +423,14 @@ class Visualizacao3D(QQuickWidget):
         *,
         imediato: bool = False,
         freando: bool = False,
+        pontos_interpolacao: Sequence[Sequence[float]] = (),
     ) -> None:
         if len(posicao) != 3:
             raise ValueError("A posição do carro deve possuir três coordenadas.")
         self.posicao_carro = tuple(float(valor) for valor in posicao)
         self.orientacao_carro = float(orientacao_graus)
         self.freando_carro = bool(freando)
-        camera, alvo = self.camera_seguidora.atualizar(
+        self.camera_seguidora.atualizar(
             self.posicao_carro,
             self.orientacao_carro,
             float(delta_segundos),
@@ -430,24 +439,103 @@ class Visualizacao3D(QQuickWidget):
         raiz = self.rootObject()
         if raiz is None:
             return
-        raiz.setProperty("posicaoCarro", QVector3D(*self.posicao_carro))
-        raiz.setProperty(
-            "rotacaoCarro",
-            self.orientacao_carro + CORRECAO_FRONTAL_CARRO_GRAUS,
+        raiz.setProperty("correcaoFrontalCarro", CORRECAO_FRONTAL_CARRO_GRAUS)
+        caminho = []
+        for ponto in pontos_interpolacao:
+            if len(ponto) != 3:
+                raise ValueError(
+                    "Cada ponto de interpolação deve possuir três coordenadas."
+                )
+            caminho.append(QVector3D(*(float(valor) for valor in ponto)))
+        raiz.setProperty("caminhoEstadoCarro", caminho)
+        raiz.definirEstadoCarro(
+            *self.posicao_carro,
+            self.orientacao_carro,
+            float(delta_segundos),
+            bool(imediato),
+            self.freando_carro,
         )
-        raiz.setProperty("freandoCarro", self.freando_carro)
-        raiz.setProperty("cameraSeguimentoPosicao", QVector3D(*camera))
-        raiz.setProperty("cameraSeguimentoAlvo", QVector3D(*alvo))
 
     def configurar_camera_seguidora(self, distancia: float, altura: float) -> None:
         self.camera_seguidora.configurar(distancia=distancia, altura=altura)
-        self.atualizar_carro(
+        self.camera_seguidora.atualizar(
             self.posicao_carro,
             self.orientacao_carro,
             0.0,
             imediato=True,
-            freando=self.freando_carro,
         )
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.setProperty("cameraSeguimentoDistancia", float(distancia))
+            raiz.setProperty("cameraSeguimentoAltura", float(altura))
+            raiz.setProperty(
+                "cameraSeguimentoAntecipacao",
+                float(self.camera_seguidora.antecipacao),
+            )
+            raiz.setProperty(
+                "cameraSeguimentoSuavidade",
+                float(self.camera_seguidora.suavidade),
+            )
+            raiz.atualizarCameraVisual(0.0, True)
+
+    def iniciar_apresentacao_missao(self) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.iniciarApresentacaoCarro()
+
+    def pausar_apresentacao_missao(self) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.pausarApresentacaoCarro()
+
+    def continuar_apresentacao_missao(self) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.continuarApresentacaoCarro()
+
+    def concluir_apresentacao_missao(self) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.concluirApresentacaoCarro()
+
+    def encerrar_apresentacao_missao(self) -> None:
+        raiz = self.rootObject()
+        if raiz is not None:
+            raiz.encerrarApresentacaoCarro()
+
+    def configurar_diagnostico_desempenho(
+        self, diagnostico: DiagnosticoDesempenho | None
+    ) -> None:
+        raiz = self.rootObject()
+        if raiz is not None and self._sinal_quadro_diagnostico_conectado:
+            try:
+                raiz.quadroApresentado.disconnect(
+                    self._registrar_quadro_renderizado
+                )
+            except (RuntimeError, TypeError):
+                pass
+            self._sinal_quadro_diagnostico_conectado = False
+        self._diagnostico_desempenho = diagnostico
+        self._conectar_diagnostico_desempenho()
+
+    def _conectar_diagnostico_desempenho(self) -> None:
+        raiz = self.rootObject()
+        diagnostico = self._diagnostico_desempenho
+        if (
+            raiz is None
+            or diagnostico is None
+            or not diagnostico.habilitado
+            or self._sinal_quadro_diagnostico_conectado
+        ):
+            return
+        raiz.quadroApresentado.connect(self._registrar_quadro_renderizado)
+        self._sinal_quadro_diagnostico_conectado = True
+
+    def _registrar_quadro_renderizado(self, delta_segundos: float) -> None:
+        if self._diagnostico_desempenho is not None:
+            self._diagnostico_desempenho.registrar_quadro_renderizado(
+                float(delta_segundos)
+            )
 
     def definir_modo_interacao(self, modo: str) -> None:
         if modo not in {

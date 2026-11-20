@@ -504,15 +504,12 @@ class EditorCidade3D:
     def confirmar_rua(
         self,
         peso: float,
-        fator_km_por_unidade: float,
         *,
         validada_automaticamente: bool = True,
     ) -> None:
         operacao = self.operacao_rua
         if operacao.origem is None or operacao.destino is None:
             raise ValueError("Selecione os dois extremos da rua.")
-        if fator_km_por_unidade <= 0:
-            raise ValueError("O fator de conversão deve ser positivo.")
         chave = self.projeto.chave_aresta(operacao.origem, operacao.destino)
         if operacao.editando_aresta is None:
             self.projeto.grafo.adicionar_aresta(
@@ -528,7 +525,6 @@ class EditorCidade3D:
             list(operacao.pontos_intermediarios),
             bool(validada_automaticamente),
         )
-        self.projeto.fator_km_por_unidade = float(fator_km_por_unidade)
         self.cancelar_operacao()
         self.modo = ModoEditor.NAVEGAR
 
@@ -660,6 +656,11 @@ class EditorCidade3D:
         ] | None = None,
     ) -> list[dict[str, object]]:
         segmentos: list[dict[str, object]] = []
+        vertice_selecionado = (
+            self.selecao[1]
+            if self.selecao is not None and self.selecao[0] == "vertice"
+            else None
+        )
         for chave, geometria in self.projeto.ruas.items():
             pontos = self.pontos_rua(
                 geometria.origem,
@@ -674,6 +675,10 @@ class EditorCidade3D:
             )
             if self.selecao == ("aresta", *chave):
                 cor = "#F59E0B"
+            elif vertice_selecionado is not None and vertice_selecionado in chave:
+                cor = "#22D3EE"
+            elif vertice_selecionado is not None:
+                cor = "#334155"
             elif validacao is not None and validacao[0]:
                 cor = "#5B7896"
             elif validacao is not None and validacao[1]:
@@ -685,7 +690,48 @@ class EditorCidade3D:
             else:
                 cor = "#FB923C"
             segmentos.extend(self._segmentos(pontos, identificador, cor))
-        return segmentos
+
+        # Várias arestas acadêmicas podem usar exatamente o mesmo pedaço de
+        # asfalto. A cena desenha uma única fita física e conserva a lista de
+        # arestas matemáticas para que o seletor QML ainda possa alternar entre
+        # elas e mostrar o peso oficial de cada uma.
+        agrupados: dict[
+            frozenset[tuple[float, float, float]], dict[str, object]
+        ] = {}
+        prioridade_cor = {
+            "#334155": 0,
+            "#5B7896": 1,
+            "#FB923C": 2,
+            "#EF4444": 3,
+            "#22D3EE": 4,
+            "#F59E0B": 5,
+        }
+        for segmento in segmentos:
+            inicio = (
+                float(segmento["ax"]),
+                float(segmento["ay"]),
+                float(segmento["az"]),
+            )
+            fim = (
+                float(segmento["bx"]),
+                float(segmento["by"]),
+                float(segmento["bz"]),
+            )
+            chave_fisica = frozenset((inicio, fim))
+            aresta = str(segmento["aresta"])
+            existente = agrupados.get(chave_fisica)
+            if existente is None:
+                segmento["arestas"] = [aresta]
+                agrupados[chave_fisica] = segmento
+                continue
+            arestas = existente["arestas"]
+            if aresta not in arestas:
+                arestas.append(aresta)
+            if prioridade_cor.get(str(segmento["cor"]), 0) > prioridade_cor.get(
+                str(existente["cor"]), 0
+            ):
+                existente["cor"] = segmento["cor"]
+        return list(agrupados.values())
 
     def segmentos_previa_qml(self) -> list[dict[str, object]]:
         operacao = self.operacao_rua

@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from math import hypot
+from multiprocessing import get_context
 from pathlib import Path
+from queue import Empty
+from threading import Event
+from time import perf_counter
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractScrollArea,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -23,6 +30,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QPlainTextEdit,
+    QProgressBar,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -34,6 +43,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from algorithms.caixeiro_viajante import (
+    CalculoTSPCancelado,
+    LIMITE_HELD_KARP_CLIENTES,
+    LIMITE_PADRAO_CLIENTES,
+    permutacoes_forca_bruta,
+)
+from algorithms.forca_bruta_tempo_real import (
+    ProgressoForcaBruta,
+    ResultadoForcaBrutaTempoReal,
+)
+from algorithms.processo_forca_bruta import executar_forca_bruta_processo
+from models.cenario_academico import (
+    CAMINHO_CENARIO_ACADEMICO,
+    CAMINHO_CENARIO_ACADEMICO_18,
+)
 from models.cenario_inicial import (
     ConfiguracaoCidadeInicial,
     carregar_configuracao_inicial,
@@ -58,16 +82,29 @@ from models.projeto_cidade import (
 from models.rota import (
     AlgoritmoRota,
     EstadoEspacial,
+    MetodoTSP,
     RotaCalculada,
     RotaInacessivel,
     calcular_dijkstra,
     calcular_tsp,
+    rota_de_resultado_forca_bruta,
 )
 
 from .assets_3d import ConversorBalsam
 from .animacao_missao import AnimacaoMissao
-from .dialogos_editor import DialogoRua, DialogoSuperficie, DialogoVertice
+from .dialogos_editor import (
+    DialogoRua,
+    DialogoSuperficie,
+    DialogoVertice,
+)
 from .editor_cidade import EditorCidade3D, ModoEditor
+from .formatacao import (
+    formatar_distancia_km,
+    formatar_duracao,
+    formatar_inteiro_br,
+    formatar_numero_br,
+    formatar_percentual_progresso,
+)
 from .apresentacao_rota import (
     marcadores_rota_qml,
     pontos_para_enquadrar,
@@ -85,6 +122,52 @@ def _layout_sem_margem(widget: QWidget, *, espacamento: int = 0) -> QVBoxLayout:
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(espacamento)
     return layout
+
+
+def _permitir_encolhimento_horizontal(widget: QWidget) -> None:
+    """Impede que textos longos imponham largura mínima ao painel lateral."""
+    widget.setMinimumWidth(0)
+    widget.setSizePolicy(
+        QSizePolicy.Policy.Ignored,
+        widget.sizePolicy().verticalPolicy(),
+    )
+
+
+def _configurar_combo_responsivo(combo: QComboBox) -> None:
+    combo.setMinimumWidth(0)
+    combo.setMinimumContentsLength(12)
+    combo.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+    )
+    combo.setSizePolicy(
+        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+    )
+    combo.currentTextChanged.connect(combo.setToolTip)
+
+
+class PilhaAdaptavel(QStackedWidget):
+    """Calcula altura somente pela página visível, não pela página mais alta."""
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - API Qt
+        atual = self.currentWidget()
+        return atual.sizeHint() if atual is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - API Qt
+        atual = self.currentWidget()
+        if atual is None:
+            return super().minimumSizeHint()
+        minimo = atual.minimumSizeHint()
+        return QSize(0, minimo.height())
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - API Qt
+        atual = self.currentWidget()
+        return bool(atual is not None and atual.hasHeightForWidth())
+
+    def heightForWidth(self, largura: int) -> int:  # noqa: N802 - API Qt
+        atual = self.currentWidget()
+        if atual is not None and atual.hasHeightForWidth():
+            return atual.heightForWidth(largura)
+        return self.sizeHint().height()
 
 
 class CartaoInformacao(QFrame):
@@ -117,6 +200,8 @@ class CartaoInformacao(QFrame):
         layout.addLayout(textos, 1)
 
     def definir(self, texto: str) -> None:
+        if self.valor.text() == texto and self.valor.toolTip() == texto:
+            return
         self.valor.setText(texto)
         self.valor.setToolTip(texto)
 
@@ -152,6 +237,25 @@ class JanelaPrincipal(QMainWindow):
         self.projeto_modificado = False
         self.rota_calculada: RotaCalculada | None = None
         self._calculando_rota = False
+        self._executor_calculo = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="calculo-rota"
+        )
+        self._futuro_calculo: Future[RotaCalculada] | None = None
+        self._cancelamento_calculo: Event | None = None
+        self._inicio_calculo = 0.0
+        self._timer_calculo = QTimer(self)
+        self._timer_calculo.setInterval(50)
+        self._timer_calculo.timeout.connect(self._verificar_calculo_rota)
+        self._processo_forca_bruta = None
+        self._fila_forca_bruta = None
+        self._evento_forca_bruta = None
+        self._inicio_forca_bruta = 0.0
+        self._progresso_forca_bruta: ProgressoForcaBruta | None = None
+        self._timer_forca_bruta = QTimer(self)
+        self._timer_forca_bruta.setInterval(100)
+        self._timer_forca_bruta.timeout.connect(self._verificar_forca_bruta)
+        self._ultimo_resultado_held: RotaCalculada | None = None
+        self._ultimo_resultado_forca: RotaCalculada | None = None
         self._atualizando_campos_rota = False
         self.controlador_missao: ControladorMissao | None = None
         self.animacao_missao: AnimacaoMissao | None = None
@@ -282,7 +386,7 @@ class JanelaPrincipal(QMainWindow):
     def _criar_painel_controles(self) -> QFrame:
         painel = QFrame()
         painel.setObjectName("painelLateral")
-        painel.setMinimumWidth(280)
+        painel.setMinimumWidth(320)
         painel.setMaximumWidth(440)
         layout = _layout_sem_margem(painel)
         topo = QLabel("Controles")
@@ -292,17 +396,32 @@ class JanelaPrincipal(QMainWindow):
 
         self.rolagem_controles = QScrollArea()
         self.rolagem_controles.setWidgetResizable(True)
+        self.rolagem_controles.setSizeAdjustPolicy(
+            QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
+        )
         self.rolagem_controles.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         conteudo = QWidget()
+        conteudo.setObjectName("conteudoControles")
+        conteudo.setMinimumWidth(0)
+        conteudo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.conteudo_controles = conteudo
         grupos = QVBoxLayout(conteudo)
         grupos.setContentsMargins(12, 4, 12, 14)
         grupos.setSpacing(10)
-        grupos.addWidget(self._grupo_edicao())
-        grupos.addWidget(self._grupo_rota())
-        grupos.addWidget(self._grupo_missao())
-        grupos.addStretch(1)
+        grupos.setAlignment(Qt.AlignmentFlag.AlignTop)
+        for grupo in (
+            self._grupo_edicao(),
+            self._grupo_rota(),
+            self._grupo_missao(),
+        ):
+            grupo.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+            )
+            grupos.addWidget(grupo)
         self.rolagem_controles.setWidget(conteudo)
         layout.addWidget(self.rolagem_controles, 1)
         return painel
@@ -413,6 +532,20 @@ class JanelaPrincipal(QMainWindow):
         arquivos.addWidget(self.botao_abrir_projeto)
         arquivos.addWidget(self.botao_salvar_projeto)
         layout.addLayout(arquivos)
+        self.botao_carregar_grafo_academico = QPushButton(
+            "Carregar grafo acadêmico"
+        )
+        self.botao_carregar_grafo_academico.setToolTip(
+            "Abre o exemplo de 5 vértices e 8 arestas sobre as ruas da cidade."
+        )
+        layout.addWidget(self.botao_carregar_grafo_academico)
+        self.botao_carregar_grafo_academico_18 = QPushButton(
+            "Carregar grafo de 18 vértices"
+        )
+        self.botao_carregar_grafo_academico_18.setToolTip(
+            "Abre o grafo acadêmico completo com 45 arestas viárias validadas."
+        )
+        layout.addWidget(self.botao_carregar_grafo_academico_18)
 
         self.botao_navegar.clicked.connect(self._modo_navegar)
         self.botao_adicionar_ponto.clicked.connect(
@@ -439,24 +572,42 @@ class JanelaPrincipal(QMainWindow):
         self.botao_novo_projeto.clicked.connect(self.novo_cenario)
         self.botao_abrir_projeto.clicked.connect(lambda: self.abrir_projeto())
         self.botao_salvar_projeto.clicked.connect(lambda: self.salvar_projeto())
+        self.botao_carregar_grafo_academico.clicked.connect(
+            lambda: self.carregar_grafo_academico()
+        )
+        self.botao_carregar_grafo_academico_18.clicked.connect(
+            lambda: self.carregar_grafo_academico_18()
+        )
         return grupo
 
     def _grupo_rota(self) -> QGroupBox:
         grupo = QGroupBox("Calcular rota")
         layout = QVBoxLayout(grupo)
         layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.seletor_algoritmo = QComboBox()
         self.seletor_algoritmo.setObjectName("seletorAlgoritmo")
+        _configurar_combo_responsivo(self.seletor_algoritmo)
         self.seletor_algoritmo.addItem("Dijkstra — menor caminho", "dijkstra")
         self.seletor_algoritmo.addItem("Caixeiro Viajante — TSP", "tsp")
         layout.addWidget(self.seletor_algoritmo)
 
-        self.campos_algoritmo = QStackedWidget()
+        self.campos_algoritmo = PilhaAdaptavel()
+        self.campos_algoritmo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
         pagina_dijkstra = QWidget()
+        pagina_dijkstra.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
         campos_dijkstra = QVBoxLayout(pagina_dijkstra)
         campos_dijkstra.setContentsMargins(0, 0, 0, 0)
+        campos_dijkstra.setSpacing(5)
+        campos_dijkstra.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.origem = QComboBox()
         self.destino = QComboBox()
+        _configurar_combo_responsivo(self.origem)
+        _configurar_combo_responsivo(self.destino)
         for vertice in self.grafo.listar_vertices():
             texto = f"{vertice.identificador} — {vertice.nome}"
             self.origem.addItem(texto, vertice.identificador)
@@ -468,8 +619,13 @@ class JanelaPrincipal(QMainWindow):
         campos_dijkstra.addWidget(self.destino)
 
         pagina_tsp = QWidget()
+        pagina_tsp.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
         campos_tsp = QVBoxLayout(pagina_tsp)
         campos_tsp.setContentsMargins(0, 0, 0, 0)
+        campos_tsp.setSpacing(6)
+        campos_tsp.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.deposito_tsp = QLabel()
         self.deposito_tsp.setObjectName("depositoTsp")
         deposito = self.grafo.obter_deposito()
@@ -478,6 +634,8 @@ class JanelaPrincipal(QMainWindow):
             if deposito is not None
             else "Nenhum depósito cadastrado"
         )
+        self.deposito_tsp.setWordWrap(True)
+        _permitir_encolhimento_horizontal(self.deposito_tsp)
         campos_tsp.addWidget(QLabel("Depósito"))
         campos_tsp.addWidget(self.deposito_tsp)
         self.selecionar_todos_clientes = QCheckBox("Selecionar todos")
@@ -486,6 +644,10 @@ class JanelaPrincipal(QMainWindow):
         campos_tsp.addWidget(self.selecionar_todos_clientes)
         campos_tsp.addWidget(QLabel("Clientes"))
         self.lista_clientes = QListWidget()
+        self.lista_clientes.setMinimumWidth(0)
+        self.lista_clientes.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         self.lista_clientes.setMaximumHeight(108)
         for cliente in self.grafo.listar_clientes():
             item = QListWidgetItem(f"{cliente.identificador} — {cliente.nome}")
@@ -495,13 +657,227 @@ class JanelaPrincipal(QMainWindow):
         campos_tsp.addWidget(self.lista_clientes)
         self.quantidade_clientes = QLabel()
         self.quantidade_clientes.setObjectName("quantidadeClientes")
+        self.quantidade_clientes.setWordWrap(True)
+        _permitir_encolhimento_horizontal(self.quantidade_clientes)
         campos_tsp.addWidget(self.quantidade_clientes)
+        campos_tsp.addWidget(QLabel("Método de cálculo"))
+        self.seletor_metodo_tsp = QComboBox()
+        _configurar_combo_responsivo(self.seletor_metodo_tsp)
+        self.seletor_metodo_tsp.addItem(
+            "Held–Karp — programação dinâmica exata",
+            MetodoTSP.HELD_KARP.value,
+        )
+        self.seletor_metodo_tsp.addItem(
+            "Força Bruta — Demonstração em Tempo Real",
+            MetodoTSP.FORCA_BRUTA_DEMONSTRACAO.value,
+        )
+        self.seletor_metodo_tsp.addItem(
+            "Força bruta — permutações (máx. 8)",
+            MetodoTSP.FORCA_BRUTA.value,
+        )
+        campos_tsp.addWidget(self.seletor_metodo_tsp)
+
+        painel_complexidade = QGroupBox("Análise de complexidade")
+        grade_complexidade = QGridLayout(painel_complexidade)
+        grade_complexidade.setContentsMargins(9, 9, 9, 9)
+        grade_complexidade.setHorizontalSpacing(8)
+        grade_complexidade.setVerticalSpacing(5)
+        grade_complexidade.setColumnStretch(0, 1)
+        grade_complexidade.setColumnStretch(1, 1)
+        self.complexidade_vertices = QLabel()
+        self.complexidade_clientes = QLabel()
+        self.complexidade_permutacoes = QLabel()
+        self.complexidade_algoritmo = QLabel()
+        self.complexidade_tempo = QLabel("—")
+        self.complexidade_peso = QLabel("—")
+        campos_complexidade = (
+            ("Vértices do grafo", self.complexidade_vertices),
+            ("Clientes selecionados", self.complexidade_clientes),
+            ("Permutações (n!)", self.complexidade_permutacoes),
+            ("Algoritmo", self.complexidade_algoritmo),
+            ("Tempo de execução", self.complexidade_tempo),
+            ("Peso total", self.complexidade_peso),
+        )
+        for linha, (rotulo, valor) in enumerate(campos_complexidade):
+            etiqueta = QLabel(rotulo)
+            etiqueta.setWordWrap(True)
+            _permitir_encolhimento_horizontal(etiqueta)
+            grade_complexidade.addWidget(etiqueta, linha, 0)
+            valor.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop
+            )
+            valor.setWordWrap(True)
+            _permitir_encolhimento_horizontal(valor)
+            valor.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            grade_complexidade.addWidget(valor, linha, 1)
+        explicacao = QLabel(
+            "n! representa o espaço de busca da força bruta; não é a quantidade "
+            "de operações executadas por Held–Karp ou por uma heurística."
+        )
+        explicacao.setObjectName("notaFutura")
+        explicacao.setWordWrap(True)
+        _permitir_encolhimento_horizontal(explicacao)
+        grade_complexidade.addWidget(explicacao, len(campos_complexidade), 0, 1, 2)
+        campos_tsp.addWidget(painel_complexidade)
+
+        self.painel_progresso_forca = QGroupBox("Progresso da força bruta")
+        progresso_layout = QVBoxLayout(self.painel_progresso_forca)
+        progresso_layout.setContentsMargins(9, 9, 9, 9)
+        progresso_layout.setSpacing(7)
+
+        def titulo_bloco(texto: str) -> QLabel:
+            titulo = QLabel(texto)
+            titulo.setObjectName("subtituloPainel")
+            return titulo
+
+        def preparar_grade(grade: QGridLayout) -> None:
+            grade.setContentsMargins(0, 0, 0, 0)
+            grade.setHorizontalSpacing(8)
+            grade.setVerticalSpacing(4)
+            grade.setColumnStretch(0, 1)
+            grade.setColumnStretch(1, 1)
+
+        def adicionar_metrica(
+            grade: QGridLayout,
+            linha: int,
+            texto: str,
+            valor: QLabel,
+        ) -> None:
+            etiqueta = QLabel(texto)
+            etiqueta.setWordWrap(True)
+            _permitir_encolhimento_horizontal(etiqueta)
+            valor.setWordWrap(True)
+            valor.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop
+            )
+            valor.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            _permitir_encolhimento_horizontal(valor)
+            grade.addWidget(etiqueta, linha, 0)
+            grade.addWidget(valor, linha, 1)
+
+        self.progresso_clientes = QLabel("—")
+        self.progresso_total = QLabel("—")
+        self.progresso_avaliadas = QLabel("0")
+        self.progresso_percentual = QLabel("0,000000%")
+        progresso_layout.addWidget(titulo_bloco("PROGRESSO"))
+        grade_progresso = QGridLayout()
+        preparar_grade(grade_progresso)
+        for linha, (rotulo, valor) in enumerate(
+            (
+                ("Clientes selecionados", self.progresso_clientes),
+                ("Total de permutações", self.progresso_total),
+                ("Realmente avaliadas", self.progresso_avaliadas),
+                ("Percentual concluído", self.progresso_percentual),
+            )
+        ):
+            adicionar_metrica(grade_progresso, linha, rotulo, valor)
+        progresso_layout.addLayout(grade_progresso)
+        self.barra_progresso_forca = QProgressBar()
+        self.barra_progresso_forca.setRange(0, 1_000_000)
+        self.barra_progresso_forca.setValue(0)
+        self.barra_progresso_forca.setFormat("0,000000%")
+        self.barra_progresso_forca.setTextVisible(True)
+        progresso_layout.addWidget(self.barra_progresso_forca)
+
+        self.progresso_taxa = QLabel("—")
+        self.progresso_tempo = QLabel("0,0 s")
+        self.progresso_estimativa = QLabel("Aguardando dados suficientes")
+        progresso_layout.addWidget(titulo_bloco("DESEMPENHO"))
+        grade_desempenho = QGridLayout()
+        preparar_grade(grade_desempenho)
+        for linha, (rotulo, valor) in enumerate(
+            (
+                ("Permutações por segundo", self.progresso_taxa),
+                ("Tempo decorrido", self.progresso_tempo),
+                ("Tempo restante estimado", self.progresso_estimativa),
+            )
+        ):
+            adicionar_metrica(grade_desempenho, linha, rotulo, valor)
+        progresso_layout.addLayout(grade_desempenho)
+
+        progresso_layout.addWidget(titulo_bloco("MELHOR SOLUÇÃO PARCIAL"))
+        self.progresso_melhor_custo = QLabel("—")
+        grade_melhor = QGridLayout()
+        preparar_grade(grade_melhor)
+        adicionar_metrica(
+            grade_melhor, 0, "Melhor custo encontrado", self.progresso_melhor_custo
+        )
+        progresso_layout.addLayout(grade_melhor)
+        rotulo_sequencia = QLabel("Melhor sequência encontrada")
+        rotulo_sequencia.setWordWrap(True)
+        _permitir_encolhimento_horizontal(rotulo_sequencia)
+        progresso_layout.addWidget(rotulo_sequencia)
+        self.progresso_melhor_ordem = QPlainTextEdit()
+        self.progresso_melhor_ordem.setReadOnly(True)
+        self.progresso_melhor_ordem.setPlainText("—")
+        self.progresso_melhor_ordem.setLineWrapMode(
+            QPlainTextEdit.LineWrapMode.WidgetWidth
+        )
+        self.progresso_melhor_ordem.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.progresso_melhor_ordem.setMinimumHeight(62)
+        self.progresso_melhor_ordem.setMaximumHeight(88)
+        self.progresso_melhor_ordem.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        progresso_layout.addWidget(self.progresso_melhor_ordem)
+
+        progresso_layout.addWidget(titulo_bloco("CONTROLES"))
+        grade_controles = QGridLayout()
+        preparar_grade(grade_controles)
+        grade_controles.addWidget(QLabel("Duração máxima"), 0, 0)
+        self.duracao_maxima_forca = QComboBox()
+        _configurar_combo_responsivo(self.duracao_maxima_forca)
+        self.duracao_maxima_forca.addItem("Sem limite", None)
+        self.duracao_maxima_forca.addItem("10 segundos", 10.0)
+        self.duracao_maxima_forca.addItem("30 segundos", 30.0)
+        self.duracao_maxima_forca.addItem("60 segundos", 60.0)
+        self.duracao_maxima_forca.setCurrentIndex(1)
+        grade_controles.addWidget(self.duracao_maxima_forca, 0, 1)
+        self.botao_iniciar_forca = QPushButton("Iniciar cálculo")
+        self.botao_iniciar_forca.setObjectName("botaoPrimario")
+        self.botao_interromper_forca = QPushButton("Interromper cálculo")
+        self.botao_interromper_forca.setEnabled(False)
+        grade_controles.addWidget(self.botao_iniciar_forca, 1, 0, 1, 2)
+        grade_controles.addWidget(self.botao_interromper_forca, 2, 0, 1, 2)
+        progresso_layout.addLayout(grade_controles)
+        self.estado_forca_bruta = QLabel("Aguardando início.")
+        self.estado_forca_bruta.setObjectName("notaFutura")
+        self.estado_forca_bruta.setWordWrap(True)
+        _permitir_encolhimento_horizontal(self.estado_forca_bruta)
+        progresso_layout.addWidget(self.estado_forca_bruta)
+        self.painel_progresso_forca.setVisible(False)
+        campos_tsp.addWidget(self.painel_progresso_forca)
+
+        comparacao = QGroupBox("Comparação dos métodos")
+        comparacao_layout = QVBoxLayout(comparacao)
+        self.comparacao_held = QLabel("Held–Karp: ainda não executado.")
+        self.comparacao_forca = QLabel("Força bruta: ainda não executada.")
+        self.comparacao_held.setWordWrap(True)
+        self.comparacao_forca.setWordWrap(True)
+        _permitir_encolhimento_horizontal(self.comparacao_held)
+        _permitir_encolhimento_horizontal(self.comparacao_forca)
+        comparacao_layout.addWidget(self.comparacao_held)
+        comparacao_layout.addWidget(self.comparacao_forca)
+        campos_tsp.addWidget(comparacao)
         self.campos_algoritmo.addWidget(pagina_dijkstra)
         self.campos_algoritmo.addWidget(pagina_tsp)
+        self.campos_algoritmo.currentChanged.connect(
+            lambda _indice: self._recalcular_layout_controles()
+        )
         layout.addWidget(self.campos_algoritmo)
         self.botao_calcular = QPushButton("Calcular menor caminho")
         self.botao_calcular.setObjectName("botaoPrimario")
         layout.addWidget(self.botao_calcular)
+        self.botao_cancelar_calculo = QPushButton("Cancelar cálculo")
+        self.botao_cancelar_calculo.setEnabled(False)
+        self.botao_cancelar_calculo.setVisible(False)
+        layout.addWidget(self.botao_cancelar_calculo)
         acoes = QHBoxLayout()
         self.botao_limpar_rota = QPushButton("Limpar rota")
         self.botao_enquadrar_rota = QPushButton("Enquadrar rota")
@@ -532,6 +908,18 @@ class JanelaPrincipal(QMainWindow):
         layout.addWidget(self.resultado_ordem)
         layout.addWidget(self.resultado_percurso)
         layout.addWidget(self.resultado_clientes)
+        self.resultado_metricas = QLabel()
+        self.resultado_metricas.setObjectName("resultadoRota")
+        self.resultado_metricas.setWordWrap(True)
+        for resultado in (
+            self.resultado_ordem,
+            self.resultado_percurso,
+            self.resultado_clientes,
+            self.resultado_metricas,
+            self.resultado_calibracao,
+        ):
+            _permitir_encolhimento_horizontal(resultado)
+        layout.addWidget(self.resultado_metricas)
         layout.addWidget(self.resultado_calibracao)
 
         self.seletor_algoritmo.currentIndexChanged.connect(
@@ -543,10 +931,18 @@ class JanelaPrincipal(QMainWindow):
         self.origem.currentIndexChanged.connect(self._entrada_rota_alterada)
         self.destino.currentIndexChanged.connect(self._entrada_rota_alterada)
         self.lista_clientes.itemChanged.connect(self._clientes_alterados)
+        self.seletor_metodo_tsp.currentIndexChanged.connect(
+            self._metodo_tsp_alterado
+        )
         self.selecionar_todos_clientes.toggled.connect(
             self._selecionar_todos_clientes
         )
         self.botao_calcular.clicked.connect(self._calcular_rota)
+        self.botao_cancelar_calculo.clicked.connect(self._cancelar_calculo_rota)
+        self.botao_interromper_forca.clicked.connect(
+            self._interromper_forca_bruta
+        )
+        self.botao_iniciar_forca.clicked.connect(self._calcular_rota)
         self.botao_limpar_rota.clicked.connect(lambda: self.limpar_rota())
         self.botao_enquadrar_rota.clicked.connect(self._enquadrar_rota)
         self._atualizar_resumo_clientes()
@@ -575,15 +971,25 @@ class JanelaPrincipal(QMainWindow):
         velocidade = QHBoxLayout()
         velocidade.addWidget(QLabel("Velocidade"))
         self.seletor_velocidade = QComboBox()
-        for texto, valor in (("0,5x", 0.5), ("1x", 1.0), ("2x", 2.0), ("4x", 4.0)):
+        for texto, valor in (
+            ("0,5×", 0.5), ("1×", 1.0), ("2×", 2.0), ("4×", 4.0),
+            ("8×", 8.0), ("16×", 16.0), ("32×", 32.0), ("64×", 64.0),
+        ):
             self.seletor_velocidade.addItem(texto, valor)
         self.seletor_velocidade.setCurrentIndex(1)
         velocidade.addWidget(self.seletor_velocidade, 1)
         layout.addLayout(velocidade)
+        self.modo_apresentacao = QCheckBox("Modo apresentação (inicia em 16×)")
+        self.modo_apresentacao.setToolTip(
+            "Os valores são multiplicadores do tempo de simulação, não velocidades reais."
+        )
+        layout.addWidget(self.modo_apresentacao)
         self.indicador_velocidade = QLabel(
             "Velocidade: 0,000 unid./s · Parado"
         )
         self.indicador_velocidade.setObjectName("notaFutura")
+        self.indicador_velocidade.setWordWrap(True)
+        _permitir_encolhimento_horizontal(self.indicador_velocidade)
         layout.addWidget(self.indicador_velocidade)
 
         cameras = QGridLayout()
@@ -614,6 +1020,7 @@ class JanelaPrincipal(QMainWindow):
         self.resumo_missao = QLabel("Calcule e calibre uma rota para iniciar.")
         self.resumo_missao.setObjectName("notaFutura")
         self.resumo_missao.setWordWrap(True)
+        _permitir_encolhimento_horizontal(self.resumo_missao)
         layout.addWidget(self.resumo_missao)
         self.botao_iniciar.clicked.connect(self._iniciar_missao)
         self.botao_pausar.clicked.connect(self._pausar_missao)
@@ -623,6 +1030,7 @@ class JanelaPrincipal(QMainWindow):
         self.seletor_velocidade.currentIndexChanged.connect(
             self._velocidade_missao_alterada
         )
+        self.modo_apresentacao.toggled.connect(self._modo_apresentacao_alterado)
         self.distancia_camera.valueChanged.connect(self._configurar_camera_missao)
         self.altura_camera.valueChanged.connect(self._configurar_camera_missao)
         self.botao_camera_livre.clicked.connect(self.visualizacao.camera_livre)
@@ -638,6 +1046,15 @@ class JanelaPrincipal(QMainWindow):
         rota = self.rota_calculada
         if rota is None:
             return False, "Calcule uma rota antes de iniciar a missão."
+        if (
+            rota.metodo_tsp is MetodoTSP.FORCA_BRUTA_DEMONSTRACAO
+            and not rota.busca_tsp_completa
+        ):
+            return (
+                False,
+                "A solução parcial pode ser visualizada, mas a missão exige "
+                "uma busca concluída ou uma rota exata do Held–Karp.",
+            )
         if not rota.segmentos_espaciais:
             return False, "A rota é trivial e não possui um trajeto para animar."
         if not rota.calibracao_completa:
@@ -687,7 +1104,13 @@ class JanelaPrincipal(QMainWindow):
             if self.controlador_missao is not None
             else None
         )
-        apta, motivo = self._rota_apta_para_missao()
+        if self._sessao_missao_ativa:
+            # A rota já foi integralmente validada antes de iniciar. Repetir a
+            # validação espacial a cada atualização textual percorria todas as
+            # ruas e bloqueava a thread gráfica por dezenas de milissegundos.
+            apta, motivo = False, "Encerre a missão atual antes de iniciar outra."
+        else:
+            apta, motivo = self._rota_apta_para_missao()
         self.botao_iniciar.setEnabled(apta and not self._sessao_missao_ativa)
         self.botao_iniciar.setToolTip(motivo)
         self.botao_pausar.setEnabled(
@@ -714,17 +1137,22 @@ class JanelaPrincipal(QMainWindow):
         self._sessao_missao_ativa = bloqueado
         controles_rota = (
             self.seletor_algoritmo,
+            self.seletor_metodo_tsp,
             self.origem,
             self.destino,
             self.lista_clientes,
             self.selecionar_todos_clientes,
+            self.duracao_maxima_forca,
             self.botao_calcular,
+            self.botao_iniciar_forca,
             self.botao_limpar_rota,
         )
         for controle in controles_rota:
             controle.setEnabled(not bloqueado)
         self.botao_abrir_projeto.setEnabled(not bloqueado)
         self.botao_novo_projeto.setEnabled(not bloqueado)
+        self.botao_carregar_grafo_academico.setEnabled(not bloqueado)
+        self.botao_carregar_grafo_academico_18.setEnabled(not bloqueado)
         if bloqueado:
             self._modo_navegar()
             for botao in self.botoes_edicao:
@@ -787,14 +1215,21 @@ class JanelaPrincipal(QMainWindow):
         self.controlador_missao = controlador
         self.animacao_missao = AnimacaoMissao(controlador, self)
         self.animacao_missao.quadro_atualizado.connect(
-            self._atualizar_quadro_missao
+            self._atualizar_pose_missao
+        )
+        self.animacao_missao.painel_atualizado.connect(
+            self._atualizar_painel_missao
         )
         self.animacao_missao.concluida.connect(self._missao_concluida)
+        self.visualizacao.configurar_diagnostico_desempenho(
+            self.animacao_missao.diagnostico
+        )
         self._chave_visual_missao = None
         self.resumo_missao.setText("Missão em andamento.")
         self._definir_bloqueio_missao(True)
         self._configurar_camera_missao()
         self.visualizacao.camera_atras_do_carro()
+        self.visualizacao.iniciar_apresentacao_missao()
         self.animacao_missao.iniciar()
         self._atualizar_controles_missao()
 
@@ -805,6 +1240,7 @@ class JanelaPrincipal(QMainWindow):
             self.animacao_missao.pausar()
         except ErroMissao:
             return
+        self.visualizacao.pausar_apresentacao_missao()
         self._atualizar_controles_missao()
 
     def _continuar_missao(self) -> None:
@@ -814,6 +1250,7 @@ class JanelaPrincipal(QMainWindow):
             self.animacao_missao.continuar()
         except ErroMissao:
             return
+        self.visualizacao.continuar_apresentacao_missao()
         self._atualizar_controles_missao()
 
     def _reiniciar_missao(self) -> None:
@@ -822,7 +1259,9 @@ class JanelaPrincipal(QMainWindow):
         try:
             self._chave_visual_missao = None
             self.resumo_missao.setText("Missão reiniciada.")
+            self.visualizacao.encerrar_apresentacao_missao()
             self._aplicar_pose_estacionamento()
+            self.visualizacao.iniciar_apresentacao_missao()
             self.animacao_missao.reiniciar()
         except ErroMissao:
             return
@@ -840,6 +1279,8 @@ class JanelaPrincipal(QMainWindow):
         if self.animacao_missao is not None:
             self.animacao_missao.encerrar()
             self.animacao_missao.deleteLater()
+        self.visualizacao.encerrar_apresentacao_missao()
+        self.visualizacao.configurar_diagnostico_desempenho(None)
         self.animacao_missao = None
         self.controlador_missao = None
         self._chave_visual_missao = None
@@ -857,12 +1298,18 @@ class JanelaPrincipal(QMainWindow):
                 self.seletor_velocidade.currentData()
             )
 
+    def _modo_apresentacao_alterado(self, ativo: bool) -> None:
+        if ativo:
+            indice = self.seletor_velocidade.findData(16.0)
+            if indice >= 0:
+                self.seletor_velocidade.setCurrentIndex(indice)
+
     def _configurar_camera_missao(self, *_args) -> None:
         self.visualizacao.configurar_camera_seguidora(
             self.distancia_camera.value(), self.altura_camera.value()
         )
 
-    def _atualizar_quadro_missao(
+    def _atualizar_pose_missao(
         self, quadro: QuadroMissao, delta_segundos: float
     ) -> None:
         self.visualizacao.atualizar_carro(
@@ -871,7 +1318,17 @@ class JanelaPrincipal(QMainWindow):
             delta_segundos,
             imediato=delta_segundos == 0.0,
             freando=quadro.freando,
+            pontos_interpolacao=quadro.pontos_interpolacao,
         )
+
+    def _atualizar_quadro_missao(
+        self, quadro: QuadroMissao, delta_segundos: float
+    ) -> None:
+        """Adaptador de compatibilidade para testes e integrações síncronas."""
+        self._atualizar_pose_missao(quadro, delta_segundos)
+        self._atualizar_painel_missao(quadro)
+
+    def _atualizar_painel_missao(self, quadro: QuadroMissao) -> None:
         rota = self.rota_calculada
         if rota is None:
             return
@@ -896,8 +1353,9 @@ class JanelaPrincipal(QMainWindow):
             )
             self._chave_visual_missao = chave
         self.cartao_distancia.definir(
-            f"{rota.distancia_total:g} km · {quadro.distancia_percorrida:.2f} perc. · "
-            f"{quadro.distancia_restante:.2f} rest."
+            f"{formatar_distancia_km(rota.distancia_total)} · "
+            f"{formatar_distancia_km(quadro.distancia_percorrida)} perc. · "
+            f"{formatar_distancia_km(quadro.distancia_restante)} rest."
         )
         self.cartao_percurso.definir(
             f"{' → '.join(rota.percurso_completo)} · atual: "
@@ -938,6 +1396,7 @@ class JanelaPrincipal(QMainWindow):
         self._atualizar_controles_missao()
 
     def _missao_concluida(self, resumo: ResumoMissao) -> None:
+        self.visualizacao.concluir_apresentacao_missao()
         self.resumo_missao.setText(self._texto_resumo_missao(resumo))
         self._atualizar_controles_missao()
 
@@ -953,8 +1412,9 @@ class JanelaPrincipal(QMainWindow):
         estado = "concluída" if resumo.concluida else "interrompida"
         return (
             f"Missão {estado} · algoritmo: {algoritmo} · origem: {resumo.origem} · "
-            f"{alvo} · distância: {resumo.distancia_percorrida:.2f}/"
-            f"{resumo.distancia_total:g} km · entregas: {resumo.clientes_atendidos}/"
+            f"{alvo} · distância: {formatar_numero_br(resumo.distancia_percorrida)}/"
+            f"{formatar_distancia_km(resumo.distancia_total)} · "
+            f"entregas: {resumo.clientes_atendidos}/"
             f"{resumo.total_clientes}{ordem} · tempo da simulação: "
             f"{resumo.tempo_decorrido:.1f} s."
         )
@@ -966,7 +1426,77 @@ class JanelaPrincipal(QMainWindow):
             "Calcular melhor rota" if tsp else "Calcular menor caminho"
         )
         self._entrada_rota_alterada()
+        self._atualizar_visibilidade_controles_rota()
+        self._atualizar_complexidade()
         self._atualizar_disponibilidade_calculo()
+        self._recalcular_layout_controles()
+
+    def _recalcular_layout_controles(self) -> None:
+        """Recalcula alturas após trocar páginas ou revelar painéis internos."""
+        self._aplicar_recalculo_layout_controles()
+        QTimer.singleShot(0, self._aplicar_recalculo_layout_controles)
+
+    def _aplicar_recalculo_layout_controles(self) -> None:
+        if not hasattr(self, "campos_algoritmo"):
+            return
+        pagina = self.campos_algoritmo.currentWidget()
+        if pagina is not None:
+            if pagina.layout() is not None:
+                pagina.layout().activate()
+            pagina.updateGeometry()
+        self.campos_algoritmo.updateGeometry()
+        if hasattr(self, "conteudo_controles"):
+            layout = self.conteudo_controles.layout()
+            if layout is not None:
+                layout.activate()
+            self.conteudo_controles.updateGeometry()
+        if hasattr(self, "rolagem_controles"):
+            self.rolagem_controles.viewport().update()
+
+    def _metodo_tsp_atual(self) -> MetodoTSP:
+        return MetodoTSP(str(self.seletor_metodo_tsp.currentData()))
+
+    def _atualizar_visibilidade_controles_rota(self) -> None:
+        tsp = self.seletor_algoritmo.currentData() == AlgoritmoRota.TSP.value
+        demonstracao = (
+            tsp
+            and self._metodo_tsp_atual()
+            is MetodoTSP.FORCA_BRUTA_DEMONSTRACAO
+        )
+        self.painel_progresso_forca.setVisible(demonstracao)
+        self.botao_calcular.setVisible(not demonstracao)
+
+    def _limite_tsp_atual(self) -> int:
+        return (
+            LIMITE_PADRAO_CLIENTES
+            if self._metodo_tsp_atual() is MetodoTSP.FORCA_BRUTA
+            else LIMITE_HELD_KARP_CLIENTES
+        )
+
+    def _metodo_tsp_alterado(self, _indice: int = -1) -> None:
+        if self._atualizando_campos_rota:
+            return
+        self._atualizar_visibilidade_controles_rota()
+        limite = self._limite_tsp_atual()
+        selecionados = self._clientes_selecionados()
+        if len(selecionados) > limite:
+            self._atualizando_campos_rota = True
+            mantidos = set(selecionados[:limite])
+            for indice in range(self.lista_clientes.count()):
+                item = self.lista_clientes.item(indice)
+                identificador = str(item.data(Qt.ItemDataRole.UserRole))
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if identificador in mantidos
+                    else Qt.CheckState.Unchecked
+                )
+            self._atualizando_campos_rota = False
+            self._definir_instrucao(
+                f"A força bruta preserva o limite de {LIMITE_PADRAO_CLIENTES} clientes."
+            )
+        self._atualizar_resumo_clientes()
+        self._entrada_rota_alterada()
+        self._recalcular_layout_controles()
 
     def _entrada_rota_alterada(self, *_args) -> None:
         if self._atualizando_campos_rota:
@@ -987,9 +1517,14 @@ class JanelaPrincipal(QMainWindow):
         if self._atualizando_campos_rota:
             return
         self._atualizando_campos_rota = True
-        estado = Qt.CheckState.Checked if marcado else Qt.CheckState.Unchecked
+        limite = self._limite_tsp_atual()
         for indice in range(self.lista_clientes.count()):
-            self.lista_clientes.item(indice).setCheckState(estado)
+            selecionar = marcado and indice < limite
+            self.lista_clientes.item(indice).setCheckState(
+                Qt.CheckState.Checked
+                if selecionar
+                else Qt.CheckState.Unchecked
+            )
         self._atualizando_campos_rota = False
         self._atualizar_resumo_clientes()
         self._entrada_rota_alterada()
@@ -997,14 +1532,31 @@ class JanelaPrincipal(QMainWindow):
     def _clientes_alterados(self, _item: QListWidgetItem) -> None:
         if self._atualizando_campos_rota:
             return
+        selecionados = self._clientes_selecionados()
+        limite = self._limite_tsp_atual()
+        if len(selecionados) > limite:
+            self._atualizando_campos_rota = True
+            _item.setCheckState(Qt.CheckState.Unchecked)
+            self._atualizando_campos_rota = False
+            self._definir_instrucao(
+                f"O método selecionado aceita até {limite} clientes; "
+                "desmarque um cliente antes de escolher outro."
+            )
         self._atualizar_resumo_clientes()
         self._entrada_rota_alterada()
 
     def _atualizar_resumo_clientes(self) -> None:
         total = self.lista_clientes.count()
         selecionados = len(self._clientes_selecionados())
+        limite = self._limite_tsp_atual()
         self.quantidade_clientes.setText(
-            f"{selecionados} de {total} clientes selecionados"
+            f"{selecionados} de {total} clientes selecionados · "
+            f"limite do método: {limite}"
+        )
+        self.selecionar_todos_clientes.setText(
+            "Selecionar todos"
+            if total <= limite
+            else f"Selecionar os primeiros {limite}"
         )
         self._atualizando_campos_rota = True
         if selecionados == total:
@@ -1015,59 +1567,428 @@ class JanelaPrincipal(QMainWindow):
             estado = Qt.CheckState.PartiallyChecked
         self.selecionar_todos_clientes.setCheckState(estado)
         self._atualizando_campos_rota = False
+        self._atualizar_complexidade()
+        if hasattr(self, "comparacao_held"):
+            self._atualizar_comparacao_metodos()
+
+    def _atualizar_complexidade(self) -> None:
+        if not hasattr(self, "complexidade_vertices"):
+            return
+        quantidade = len(self._clientes_selecionados())
+        total_vertices = len(self.grafo.listar_vertices())
+        self.complexidade_vertices.setText(formatar_inteiro_br(total_vertices))
+        self.complexidade_clientes.setText(formatar_inteiro_br(quantidade))
+        self.complexidade_permutacoes.setText(
+            formatar_inteiro_br(permutacoes_forca_bruta(quantidade))
+        )
+        self.complexidade_algoritmo.setText(
+            self._metodo_tsp_atual().nome_exibicao
+        )
+        if self.rota_calculada is None:
+            self.complexidade_tempo.setText("—")
+            self.complexidade_peso.setText("—")
 
     def _calcular_rota(self) -> None:
         if self._calculando_rota or self._sessao_missao_ativa:
             return
-        self._calculando_rota = True
-        self.botao_calcular.setEnabled(False)
-        self.cartao_status.definir("Calculando rota…")
-        QApplication.processEvents()
         try:
             algoritmo = self.seletor_algoritmo.currentData()
             if algoritmo == AlgoritmoRota.DIJKSTRA.value:
                 origem, destino = self.origem.currentData(), self.destino.currentData()
                 if origem is None or destino is None:
                     raise ValueError("Selecione uma origem e um destino válidos.")
-                rota = calcular_dijkstra(self.projeto, str(origem), str(destino))
+                argumentos = (str(origem), str(destino))
+                metodo = None
             elif algoritmo == AlgoritmoRota.TSP.value:
                 clientes = self._clientes_selecionados()
                 if not clientes:
                     raise ValueError(
                         "Selecione pelo menos um cliente para calcular a rota TSP."
                     )
-                rota = calcular_tsp(self.projeto, clientes)
+                metodo = self._metodo_tsp_atual()
+                argumentos = (tuple(clientes),)
             else:
                 raise ValueError("Selecione um algoritmo de rota válido.")
         except (KeyError, TypeError, ValueError) as erro:
-            self.rota_calculada = None
-            self.visualizacao.limpar_destaque_rota()
-            self.cartao_distancia.definir("—")
-            self.cartao_percurso.definir("Nenhuma rota disponível")
-            self.cartao_clientes.definir("0 / 0")
-            self.resultado_ordem.setText("")
-            self.resultado_percurso.setText("")
-            self.resultado_clientes.setText("")
-            self.resultado_calibracao.setText(str(erro))
-            status = (
-                "Destino inacessível."
-                if isinstance(erro, RotaInacessivel)
-                else f"Não foi possível calcular: {erro}"
+            self._tratar_erro_calculo(erro)
+            return
+
+        if metodo is MetodoTSP.FORCA_BRUTA_DEMONSTRACAO:
+            self._iniciar_forca_bruta(tuple(argumentos[0]))
+            return
+
+        cancelamento = Event()
+        projeto = self.projeto
+
+        def executar() -> RotaCalculada:
+            inicio = perf_counter()
+            if algoritmo == AlgoritmoRota.DIJKSTRA.value:
+                rota = calcular_dijkstra(projeto, *argumentos)
+            else:
+                rota = calcular_tsp(
+                    projeto,
+                    argumentos[0],
+                    metodo=metodo,
+                    cancelado=cancelamento.is_set,
+                )
+            if cancelamento.is_set():
+                raise CalculoTSPCancelado("Cálculo cancelado pelo usuário.")
+            return replace(
+                rota,
+                tempo_processamento_segundos=perf_counter() - inicio,
+                total_vertices_grafo=len(projeto.grafo.listar_vertices()),
             )
-            self.cartao_status.definir(status)
-            self.botao_limpar_rota.setEnabled(False)
-            self.botao_enquadrar_rota.setEnabled(False)
-            self._atualizar_controles_missao()
+
+        calculo_pesado = (
+            algoritmo == AlgoritmoRota.TSP.value
+            and len(argumentos[0]) > LIMITE_PADRAO_CLIENTES
+        )
+        if not calculo_pesado:
+            try:
+                self._apresentar_rota(executar())
+            except (KeyError, TypeError, ValueError, MemoryError) as erro:
+                self._tratar_erro_calculo(erro)
+            return
+
+        self._calculando_rota = True
+        self._cancelamento_calculo = cancelamento
+        self._futuro_calculo = self._executor_calculo.submit(executar)
+        self._inicio_calculo = perf_counter()
+        self.botao_calcular.setEnabled(False)
+        self.botao_cancelar_calculo.setVisible(True)
+        self.botao_cancelar_calculo.setEnabled(True)
+        self.cartao_status.definir("Calculando rota em segundo plano…")
+        self.complexidade_tempo.setText("Em execução…")
+        self.complexidade_peso.setText("—")
+        self._definir_controles_calculo(False)
+        self._timer_calculo.start()
+
+    def _iniciar_forca_bruta(self, clientes: tuple[str, ...]) -> None:
+        contexto = get_context("spawn")
+        evento = contexto.Event()
+        fila = contexto.Queue(maxsize=16)
+        duracao = self.duracao_maxima_forca.currentData()
+        processo = contexto.Process(
+            target=executar_forca_bruta_processo,
+            args=(self.grafo, clientes, duracao, evento, fila),
+            name="forca-bruta-tsp",
+            daemon=True,
+        )
+        try:
+            processo.start()
+        except (OSError, RuntimeError, TypeError) as erro:
+            fila.close()
+            self._tratar_erro_calculo(
+                ValueError(f"Não foi possível iniciar o processo: {erro}")
+            )
+            return
+
+        self._calculando_rota = True
+        self._processo_forca_bruta = processo
+        self._fila_forca_bruta = fila
+        self._evento_forca_bruta = evento
+        self._inicio_forca_bruta = perf_counter()
+        self._progresso_forca_bruta = None
+        total = permutacoes_forca_bruta(len(clientes))
+        self.progresso_clientes.setText(formatar_inteiro_br(len(clientes)))
+        self.progresso_total.setText(formatar_inteiro_br(total))
+        self.progresso_avaliadas.setText("0")
+        self.progresso_percentual.setText("0,000000%")
+        self.progresso_taxa.setText("Aguardando medições")
+        self.progresso_tempo.setText("0,0 s")
+        self.progresso_melhor_custo.setText("—")
+        self.progresso_melhor_ordem.setPlainText("—")
+        self.progresso_estimativa.setText("Aguardando dados suficientes")
+        self.barra_progresso_forca.setValue(0)
+        self.barra_progresso_forca.setFormat("0,000000%")
+        self.estado_forca_bruta.setText(
+            "Busca exaustiva em execução; cada incremento representa uma "
+            "permutação realmente avaliada."
+        )
+        self.botao_interromper_forca.setText("Interromper cálculo")
+        self.botao_interromper_forca.setEnabled(True)
+        self.botao_calcular.setEnabled(False)
+        self.botao_iniciar_forca.setEnabled(False)
+        self.cartao_status.definir("Força bruta real em execução…")
+        self.complexidade_tempo.setText("Em execução…")
+        self.complexidade_peso.setText("—")
+        self._definir_controles_calculo(False)
+        self._timer_forca_bruta.start()
+
+    def _interromper_forca_bruta(self) -> None:
+        if self._evento_forca_bruta is None:
+            return
+        self._evento_forca_bruta.set()
+        self.botao_interromper_forca.setEnabled(False)
+        self.botao_interromper_forca.setText("Interrompendo…")
+        self.estado_forca_bruta.setText(
+            "Solicitação enviada; aguardando a última permutação em execução."
+        )
+
+    def _atualizar_progresso_forca(
+        self, progresso: ProgressoForcaBruta
+    ) -> None:
+        self._progresso_forca_bruta = progresso
+        self.progresso_clientes.setText(formatar_inteiro_br(progresso.clientes))
+        self.progresso_total.setText(
+            formatar_inteiro_br(progresso.total_permutacoes)
+        )
+        self.progresso_avaliadas.setText(
+            formatar_inteiro_br(progresso.permutacoes_avaliadas)
+        )
+        percentual = formatar_percentual_progresso(
+            progresso.permutacoes_avaliadas,
+            progresso.total_permutacoes,
+        )
+        self.progresso_percentual.setText(percentual)
+        valor_barra = (
+            progresso.permutacoes_avaliadas * 1_000_000
+            // progresso.total_permutacoes
+        )
+        self.barra_progresso_forca.setValue(valor_barra)
+        self.barra_progresso_forca.setFormat(percentual)
+        taxa = progresso.taxa_por_segundo
+        self.progresso_taxa.setText(
+            f"{formatar_inteiro_br(round(taxa))} perm/s"
+            if taxa >= 1
+            else f"{taxa:.2f} perm/s".replace(".", ",")
+        )
+        self.progresso_tempo.setText(
+            formatar_duracao(progresso.tempo_decorrido)
+        )
+        self.progresso_melhor_custo.setText(
+            formatar_distancia_km(progresso.melhor_custo)
+            if progresso.melhor_custo is not None
+            else "—"
+        )
+        self.progresso_melhor_ordem.setPlainText(
+            " → ".join(progresso.melhor_ordem)
+            if progresso.melhor_ordem
+            else "—"
+        )
+        if progresso.permutacoes_avaliadas >= progresso.total_permutacoes:
+            estimativa = "Concluída"
+        elif (
+            progresso.tempo_decorrido >= 1.0
+            and progresso.permutacoes_avaliadas >= 100
+            and taxa > 0
+        ):
+            restante = (
+                progresso.total_permutacoes - progresso.permutacoes_avaliadas
+            ) / taxa
+            estimativa = f"Estimativa pela taxa real: {formatar_duracao(restante)}"
+        else:
+            estimativa = "Aguardando dados suficientes"
+        self.progresso_estimativa.setText(estimativa)
+
+    def _verificar_forca_bruta(self) -> None:
+        fila = self._fila_forca_bruta
+        processo = self._processo_forca_bruta
+        if fila is None or processo is None:
+            self._timer_forca_bruta.stop()
+            return
+        resultado: ResultadoForcaBrutaTempoReal | None = None
+        erro: str | None = None
+        while True:
+            try:
+                tipo, carga = fila.get_nowait()
+            except Empty:
+                break
+            if tipo == "progresso":
+                self._atualizar_progresso_forca(carga)
+            elif tipo == "resultado":
+                resultado = carga
+            elif tipo == "erro":
+                erro = str(carga)
+
+        if resultado is not None:
+            self._finalizar_forca_bruta(resultado)
+            return
+        if erro is not None:
+            self._falhar_forca_bruta(erro)
+            return
+        if self._progresso_forca_bruta is None:
+            decorrido = perf_counter() - self._inicio_forca_bruta
+            self.progresso_tempo.setText(formatar_duracao(decorrido))
+        if not processo.is_alive():
+            self._falhar_forca_bruta(
+                f"O processo terminou inesperadamente (código {processo.exitcode})."
+            )
+
+    def _finalizar_forca_bruta(
+        self, resultado: ResultadoForcaBrutaTempoReal
+    ) -> None:
+        melhor = resultado.melhor_resultado
+        progresso_final = ProgressoForcaBruta(
+            clientes=len(resultado.clientes),
+            total_permutacoes=resultado.total_permutacoes,
+            permutacoes_avaliadas=resultado.permutacoes_avaliadas,
+            tempo_decorrido=resultado.tempo_decorrido,
+            melhor_custo=(
+                melhor.distancia_total if melhor is not None else None
+            ),
+            melhor_ordem=(
+                tuple(melhor.ordem_entregas) if melhor is not None else ()
+            ),
+        )
+        self._atualizar_progresso_forca(progresso_final)
+        rota = rota_de_resultado_forca_bruta(self.projeto, resultado)
+        self._liberar_processo_forca_bruta()
+        if resultado.concluida:
+            estado = "Busca exaustiva concluída — solução ótima encontrada."
+        else:
+            estado = (
+                "Busca interrompida — melhor solução encontrada até o momento."
+            )
+            if resultado.motivo_interrupcao == "tempo_limite":
+                estado += " Limite de tempo atingido."
+        self.estado_forca_bruta.setText(estado)
+        if rota is not None:
+            self._apresentar_rota(rota)
+            nota_espacial = self.resultado_calibracao.text()
+            self.resultado_calibracao.setText(f"{estado} {nota_espacial}")
+        else:
+            self.cartao_status.definir(estado)
+            self.resultado_calibracao.setText(
+                estado + " Nenhuma permutação chegou a ser avaliada."
+            )
+        self.cartao_status.definir(estado)
+        self.botao_interromper_forca.setText("Interromper cálculo")
+        self.botao_interromper_forca.setEnabled(False)
+        self._atualizar_comparacao_metodos()
+
+    def _falhar_forca_bruta(self, mensagem: str) -> None:
+        self._liberar_processo_forca_bruta()
+        self.estado_forca_bruta.setText(f"Falha no cálculo: {mensagem}")
+        self._tratar_erro_calculo(ValueError(mensagem))
+
+    def _liberar_processo_forca_bruta(self) -> None:
+        self._timer_forca_bruta.stop()
+        processo = self._processo_forca_bruta
+        fila = self._fila_forca_bruta
+        if processo is not None:
+            processo.join(timeout=0.2)
+        if fila is not None:
+            fila.close()
+            fila.join_thread()
+        self._processo_forca_bruta = None
+        self._fila_forca_bruta = None
+        self._evento_forca_bruta = None
+        self._calculando_rota = False
+        self._definir_controles_calculo(True)
+        self._atualizar_disponibilidade_calculo()
+
+    def _definir_controles_calculo(self, habilitados: bool) -> None:
+        for controle in (
+            self.seletor_algoritmo,
+            self.seletor_metodo_tsp,
+            self.origem,
+            self.destino,
+            self.lista_clientes,
+            self.selecionar_todos_clientes,
+            self.duracao_maxima_forca,
+            self.botao_iniciar_forca,
+            self.botao_abrir_projeto,
+            self.botao_novo_projeto,
+            self.botao_carregar_grafo_academico,
+            self.botao_carregar_grafo_academico_18,
+        ):
+            controle.setEnabled(habilitados)
+        if not habilitados:
+            self._modo_navegar()
+            for botao in self.botoes_edicao:
+                botao.setEnabled(False)
+            for botao in (
+                self.botao_confirmar_edicao,
+                self.botao_desfazer_edicao,
+                self.botao_refazer_edicao,
+                self.botao_cancelar_edicao,
+                self.botao_adicionar_curva,
+                self.botao_remover_curva,
+                self.botao_editar_selecao,
+                self.botao_reposicionar,
+                self.botao_excluir_selecao,
+            ):
+                botao.setEnabled(False)
+        elif self.visualizacao.modelos_preparados:
+            for botao in self.botoes_edicao:
+                botao.setEnabled(True)
+            self._atualizar_disponibilidade_editor()
+            self._atualizar_botoes_operacao()
+            self._atualizar_botoes_selecao()
+
+    def _cancelar_calculo_rota(self) -> None:
+        if self._cancelamento_calculo is None:
+            return
+        self._cancelamento_calculo.set()
+        self.botao_cancelar_calculo.setEnabled(False)
+        self.botao_cancelar_calculo.setText("Cancelando…")
+        self.cartao_status.definir("Cancelando cálculo com segurança…")
+
+    def _verificar_calculo_rota(self) -> None:
+        futuro = self._futuro_calculo
+        if futuro is None:
+            self._timer_calculo.stop()
+            return
+        if not futuro.done():
+            decorrido = perf_counter() - self._inicio_calculo
+            self.complexidade_tempo.setText(f"{decorrido:.3f} s (em execução)")
+            return
+        self._timer_calculo.stop()
+        try:
+            rota = futuro.result()
+        except CalculoTSPCancelado:
+            self.cartao_status.definir("Cálculo cancelado.")
+            self.resultado_calibracao.setText(
+                "O cálculo foi cancelado sem alterar a rota."
+            )
+            self.complexidade_tempo.setText("Cancelado")
+        except (KeyError, TypeError, ValueError, MemoryError) as erro:
+            self._tratar_erro_calculo(erro)
+        except Exception as erro:  # pragma: no cover - proteção da fronteira da thread
+            LOGGER.exception("Falha inesperada no cálculo da rota", exc_info=erro)
+            self._tratar_erro_calculo(ValueError(f"Falha inesperada: {erro}"))
         else:
             self._apresentar_rota(rota)
         finally:
+            self._futuro_calculo = None
+            self._cancelamento_calculo = None
             self._calculando_rota = False
+            self.botao_cancelar_calculo.setText("Cancelar cálculo")
+            self.botao_cancelar_calculo.setVisible(False)
+            self.botao_cancelar_calculo.setEnabled(False)
+            self._definir_controles_calculo(True)
             self._atualizar_disponibilidade_calculo()
+
+    def _tratar_erro_calculo(self, erro: Exception) -> None:
+        self.rota_calculada = None
+        self.visualizacao.limpar_destaque_rota()
+        self.cartao_distancia.definir("—")
+        self.cartao_percurso.definir("Nenhuma rota disponível")
+        self.cartao_clientes.definir("0 / 0")
+        self.resultado_ordem.setText("")
+        self.resultado_percurso.setText("")
+        self.resultado_clientes.setText("")
+        self.resultado_metricas.setText("")
+        self.resultado_calibracao.setText(str(erro))
+        status = (
+            "Destino inacessível."
+            if isinstance(erro, RotaInacessivel)
+            else f"Não foi possível calcular: {erro}"
+        )
+        self.cartao_status.definir(status)
+        self.botao_limpar_rota.setEnabled(False)
+        self.botao_enquadrar_rota.setEnabled(False)
+        self._atualizar_controles_missao()
 
     def _apresentar_rota(self, rota: RotaCalculada) -> None:
         self.rota_calculada = rota
+        if rota.metodo_tsp is MetodoTSP.HELD_KARP:
+            self._ultimo_resultado_held = rota
+        elif rota.metodo_tsp is MetodoTSP.FORCA_BRUTA_DEMONSTRACAO:
+            self._ultimo_resultado_forca = rota
         percurso = " → ".join(rota.percurso_completo)
-        self.cartao_distancia.definir(f"{rota.distancia_total:g} km")
+        self.cartao_distancia.definir(formatar_distancia_km(rota.distancia_total))
         self.cartao_percurso.definir(percurso)
         quantidade = len(rota.clientes_selecionados)
         self.cartao_clientes.definir(f"0 / {quantidade}")
@@ -1088,6 +2009,34 @@ class JanelaPrincipal(QMainWindow):
             ]
             texto = ", ".join(clientes_no_percurso) or "nenhum"
             self.resultado_clientes.setText(f"Clientes no percurso: {texto}")
+        tempo = rota.tempo_processamento_segundos or 0.0
+        algoritmo = (
+            rota.metodo_tsp.nome_exibicao
+            if rota.metodo_tsp is not None
+            else "Dijkstra"
+        )
+        permutacoes = (
+            rota.permutacoes_teoricas
+            if rota.algoritmo is AlgoritmoRota.TSP
+            else 0
+        )
+        self.resultado_metricas.setText(
+            f"Vértices: {formatar_inteiro_br(rota.total_vertices_grafo)} · "
+            f"clientes atendidos: {formatar_inteiro_br(quantidade)} · "
+            f"permutações teóricas: {formatar_inteiro_br(permutacoes)} · "
+            f"algoritmo: {algoritmo} · processamento: {tempo:.3f} s · "
+            f"peso total: {formatar_distancia_km(rota.distancia_total)}"
+            + (
+                f" · permutações realmente avaliadas: "
+                f"{formatar_inteiro_br(rota.permutacoes_avaliadas)} · "
+                f"estado: {'concluída' if rota.busca_tsp_completa else 'interrompida'}"
+                if rota.metodo_tsp
+                is MetodoTSP.FORCA_BRUTA_DEMONSTRACAO
+                else ""
+            )
+        )
+        self.complexidade_tempo.setText(f"{tempo:.3f} s")
+        self.complexidade_peso.setText(formatar_distancia_km(rota.distancia_total))
         if rota.estado_espacial is EstadoEspacial.COMPLETO:
             apta, motivo = self._rota_apta_para_missao()
             self.resultado_calibracao.setText(
@@ -1119,6 +2068,52 @@ class JanelaPrincipal(QMainWindow):
         self.resumo_missao.setText(motivo)
         self.botao_iniciar.setEnabled(apta and not self._sessao_missao_ativa)
         self._atualizar_controles_missao()
+        self._atualizar_comparacao_metodos()
+
+    def _atualizar_comparacao_metodos(self) -> None:
+        selecionados = frozenset(self._clientes_selecionados())
+        held = self._ultimo_resultado_held
+        if held is not None and frozenset(held.clientes_selecionados) == selecionados:
+            tempo = held.tempo_processamento_segundos or 0.0
+            self.comparacao_held.setText(
+                f"Held–Karp — tempo: {tempo:.3f} s · custo ótimo: "
+                f"{formatar_distancia_km(held.distancia_total)} · ordem: "
+                f"{' → '.join(held.ordem_atendimento)}"
+            )
+        else:
+            self.comparacao_held.setText(
+                "Held–Karp: ainda não executado para esta seleção."
+            )
+
+        forca = self._ultimo_resultado_forca
+        if (
+            forca is not None
+            and frozenset(forca.clientes_selecionados) == selecionados
+        ):
+            tempo = forca.tempo_processamento_segundos or 0.0
+            estado = "concluída" if forca.busca_tsp_completa else "interrompida"
+            comparacao = (
+                f"Força bruta — tempo: {tempo:.3f} s · permutações: "
+                f"{formatar_inteiro_br(forca.permutacoes_avaliadas)}/"
+                f"{formatar_inteiro_br(forca.permutacoes_teoricas)} · "
+                f"melhor custo: {formatar_distancia_km(forca.distancia_total)} · "
+                f"estado: {estado}."
+            )
+            if (
+                held is not None
+                and frozenset(held.clientes_selecionados) == selecionados
+                and held.distancia_total == forca.distancia_total
+                and not forca.busca_tsp_completa
+            ):
+                comparacao += (
+                    " O custo coincide com o ótimo garantido pelo Held–Karp; "
+                    "a busca de força bruta permanece parcial."
+                )
+            self.comparacao_forca.setText(comparacao)
+        else:
+            self.comparacao_forca.setText(
+                "Força bruta: ainda não executada para esta seleção."
+            )
 
     def limpar_rota(self, *, status: str = "Aguardando cálculo.") -> None:
         if self._sessao_missao_ativa:
@@ -1132,7 +2127,9 @@ class JanelaPrincipal(QMainWindow):
         self.resultado_ordem.setText("")
         self.resultado_percurso.setText("")
         self.resultado_clientes.setText("")
+        self.resultado_metricas.setText("")
         self.resultado_calibracao.setText(status)
+        self._atualizar_complexidade()
         self.botao_limpar_rota.setEnabled(False)
         self.botao_enquadrar_rota.setEnabled(False)
         self.resumo_missao.setText("Calcule e calibre uma rota para iniciar.")
@@ -1326,9 +2323,14 @@ class JanelaPrincipal(QMainWindow):
                 else "Selecione ao menos um cliente e calcule a rota de entregas."
             )
         self.botao_calcular.setToolTip(motivo)
-        self.botao_calcular.setEnabled(
-            disponivel and not self._calculando_rota and not self._sessao_missao_ativa
+        habilitado = (
+            disponivel
+            and not self._calculando_rota
+            and not self._sessao_missao_ativa
         )
+        self.botao_calcular.setEnabled(habilitado)
+        self.botao_iniciar_forca.setEnabled(habilitado)
+        self.botao_iniciar_forca.setToolTip(motivo)
 
     def _definir_instrucao(self, texto: str) -> None:
         self.instrucao_editor.setText(texto)
@@ -1585,12 +2587,17 @@ class JanelaPrincipal(QMainWindow):
         if destino_atual is not None and self.destino.findData(destino_atual) >= 0:
             self.destino.setCurrentIndex(self.destino.findData(destino_atual))
         self.lista_clientes.clear()
-        for cliente in self.grafo.listar_clientes():
+        clientes = self.grafo.listar_clientes()
+        limite_selecao = self._limite_tsp_atual()
+        for indice, cliente in enumerate(clientes):
             item = QListWidgetItem(f"{cliente.identificador} — {cliente.nome}")
             item.setData(Qt.ItemDataRole.UserRole, cliente.identificador)
             selecionado = (
                 cliente.identificador in clientes_selecionados
-                or cliente.identificador not in clientes_anteriores
+                or (
+                    cliente.identificador not in clientes_anteriores
+                    and indice < limite_selecao
+                )
             )
             item.setCheckState(
                 Qt.CheckState.Checked
@@ -1620,13 +2627,16 @@ class JanelaPrincipal(QMainWindow):
             estado = "não salvas" if operacao.modificada else "sem alterações"
             snap = f" · snap: {operacao.snap_origem}" if operacao.snap_origem else ""
             cabecalho = (
-                f"{operacao.origem} ↔ {operacao.destino} · peso: {peso:g} km · "
+                f"{operacao.origem} ↔ {operacao.destino} · "
+                f"peso: {formatar_distancia_km(peso)} · "
                 if peso is not None
                 else f"{operacao.origem} ↔ {operacao.destino} · peso: novo · "
             )
             self.detalhes_rua.setText(
                 cabecalho
-                + f"comprimento: {self.editor.comprimento_operacao_rua():.4f} · "
+                + "comprimento 3D: "
+                + formatar_numero_br(self.editor.comprimento_operacao_rua())
+                + " unidades · "
                 f"intermediários: {len(operacao.pontos_intermediarios)} · "
                 f"alterações {estado}{snap}"
             )
@@ -1659,8 +2669,9 @@ class JanelaPrincipal(QMainWindow):
         else:
             calibracao = "inconclusiva — " + validacao[2]
         self.detalhes_rua.setText(
-            f"{origem} ↔ {destino} · peso: {peso:g} km · comprimento: "
-            f"{comprimento:.4f} · intermediários: {intermediarios} · "
+            f"{origem} ↔ {destino} · peso: {formatar_distancia_km(peso)} · "
+            f"comprimento 3D: {formatar_numero_br(comprimento)} unidades · "
+            f"intermediários: {intermediarios} · "
             f"calibração {calibracao} · sem alterações"
         )
 
@@ -1825,7 +2836,8 @@ class JanelaPrincipal(QMainWindow):
                 "no mesmo local para alternar"
             )
         self._definir_instrucao(
-            f"Rua selecionada: {origem} ↔ {destino} · peso oficial {peso:g} km"
+            f"Rua selecionada: {origem} ↔ {destino} · "
+            f"peso oficial {formatar_distancia_km(peso)}"
             f"{complemento}."
         )
         self._sincronizar_cena()
@@ -2043,7 +3055,6 @@ class JanelaPrincipal(QMainWindow):
         operacao = self.editor.operacao_rua
         if operacao.origem is None or operacao.destino is None:
             return
-        comprimento = self.editor.comprimento_operacao_rua()
         problemas = self.editor.validar_operacao_rua()
         if problemas:
             self._mostrar_erro("\n".join(problemas))
@@ -2073,18 +3084,15 @@ class JanelaPrincipal(QMainWindow):
         dialogo = DialogoRua(
             operacao.origem,
             operacao.destino,
-            comprimento,
-            self.projeto.fator_km_por_unidade,
             self,
             peso_atual=peso_atual,
         )
         if dialogo.exec() != QDialog.DialogCode.Accepted:
             return
-        peso, fator = dialogo.dados()
+        peso = dialogo.dados()
         try:
             self.editor.confirmar_rua(
                 peso,
-                fator,
                 validada_automaticamente=(
                     validacao_automatica.valido
                     if validacao_automatica is not None
@@ -2438,6 +3446,58 @@ class JanelaPrincipal(QMainWindow):
         self._definir_instrucao(f"Projeto {self.caminho_projeto.name} carregado.")
         return True
 
+    def carregar_grafo_academico(self, *, confirmar: bool = True) -> bool:
+        """Abre o exemplo distribuído como modelo, sem torná-lo o padrão."""
+        if self._sessao_missao_ativa:
+            self._mostrar_erro(
+                "Encerre explicitamente a missão antes de carregar o exemplo."
+            )
+            return False
+        if confirmar and self.projeto_modificado:
+            resposta = QMessageBox.question(
+                self,
+                "Carregar grafo acadêmico",
+                "As alterações não salvas serão descartadas. Deseja continuar?",
+            )
+            if resposta != QMessageBox.StandardButton.Yes:
+                return False
+        if not self.abrir_projeto(CAMINHO_CENARIO_ACADEMICO):
+            return False
+
+        # O arquivo instalado é um modelo somente para carga. Uma edição
+        # posterior usa Salvar como novo projeto e não sobrescreve o exemplo.
+        self.caminho_projeto = None
+        self._definir_projeto_modificado(False)
+        self._definir_instrucao(
+            "Grafo acadêmico carregado: vértices 1–5 e oito conexões viárias."
+        )
+        return True
+
+    def carregar_grafo_academico_18(self, *, confirmar: bool = True) -> bool:
+        """Abre o cenário completo sem substituir o exemplo acadêmico menor."""
+        if self._sessao_missao_ativa:
+            self._mostrar_erro(
+                "Encerre explicitamente a missão antes de carregar o exemplo."
+            )
+            return False
+        if confirmar and self.projeto_modificado:
+            resposta = QMessageBox.question(
+                self,
+                "Carregar grafo de 18 vértices",
+                "As alterações não salvas serão descartadas. Deseja continuar?",
+            )
+            if resposta != QMessageBox.StandardButton.Yes:
+                return False
+        if not self.abrir_projeto(CAMINHO_CENARIO_ACADEMICO_18):
+            return False
+        self.caminho_projeto = None
+        self._definir_projeto_modificado(False)
+        self._definir_instrucao(
+            "Grafo acadêmico carregado: 18 vértices, 45 conexões viárias "
+            "validadas e até 17 clientes selecionáveis com Held–Karp."
+        )
+        return True
+
     def _definir_projeto_modificado(self, modificado: bool) -> None:
         self.projeto_modificado = bool(modificado)
         if hasattr(self, "botao_salvar_projeto"):
@@ -2580,11 +3640,28 @@ class JanelaPrincipal(QMainWindow):
             self._organizar_cartoes(4 if evento.size().width() >= 1180 else 2)
 
     def closeEvent(self, evento: QCloseEvent) -> None:  # noqa: N802 - API Qt
+        self._timer_calculo.stop()
+        self._timer_forca_bruta.stop()
+        if self._evento_forca_bruta is not None:
+            self._evento_forca_bruta.set()
+        if self._processo_forca_bruta is not None:
+            self._processo_forca_bruta.join(timeout=0.5)
+            if self._processo_forca_bruta.is_alive():
+                self._processo_forca_bruta.terminate()
+                self._processo_forca_bruta.join(timeout=0.2)
+        if self._fila_forca_bruta is not None:
+            self._fila_forca_bruta.cancel_join_thread()
+            self._fila_forca_bruta.close()
+        if self._cancelamento_calculo is not None:
+            self._cancelamento_calculo.set()
+        self._executor_calculo.shutdown(wait=False, cancel_futures=True)
         if self.animacao_missao is not None:
             self.animacao_missao.timer.stop()
             if self.controlador_missao is not None:
                 self.controlador_missao.encerrar()
             self.animacao_missao.deleteLater()
+        self.visualizacao.encerrar_apresentacao_missao()
+        self.visualizacao.configurar_diagnostico_desempenho(None)
         self.animacao_missao = None
         self.controlador_missao = None
         self._sessao_missao_ativa = False
